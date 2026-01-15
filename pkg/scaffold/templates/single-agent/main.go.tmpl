@@ -1,0 +1,73 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	agk "github.com/agenticgokit/agenticgokit/v1beta"
+)
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Note: API key may not be required for local models like Ollama
+	// Uncomment below if using a cloud-based LLM (OpenAI, Anthropic, etc.)
+	// apiKey := os.Getenv("OPENAI_API_KEY")
+	// if apiKey == "" {
+	// 	log.Fatal("OPENAI_API_KEY environment variable not set")
+	// }
+
+	// Create an agent with tools and memory
+	agent, err := agk.NewBuilder("researcher").
+		WithConfig(&agk.Config{
+			Name:         "researcher",
+			SystemPrompt: "You are a helpful research assistant. Provide detailed, well-structured answers with examples when appropriate.",
+			Timeout:      30 * time.Second,
+			LLM: agk.LLMConfig{
+				Provider:    "{{.LLMProvider}}",
+				Model:       "{{.LLMModel}}",
+				Temperature: 0.7,
+				MaxTokens:   2000,
+			},
+		}).
+		Build()
+	if err != nil {
+		log.Fatalf("Failed to create agent: %v", err)
+	}
+
+	// Example with tools would be added here
+	// For now, basic conversation with streaming
+
+	userMessage := "Help me understand AgenticGoKit's architecture"
+
+	fmt.Printf("User: %s\n\n", userMessage)
+	fmt.Println("Assistant:")
+
+	// Use streaming for real-time response and better timeout handling
+	stream, err := agent.RunStream(ctx, userMessage)
+	if err != nil {
+		log.Fatalf("Failed to start streaming: %v", err)
+	}
+
+	printStreamingResponse(stream)
+}
+
+// printStreamingResponse prints the streaming response as tokens arrive
+func printStreamingResponse(stream agk.Stream) {
+	for chunk := range stream.Chunks() {
+		if chunk.Error != nil {
+			fmt.Printf("\n❌ Error: %v\n", chunk.Error)
+			break
+		}
+
+		switch chunk.Type {
+		case agk.ChunkTypeDelta:
+			fmt.Print(chunk.Delta)
+		case agk.ChunkTypeDone:
+			fmt.Println("\n\n✅ Completed")
+		}
+	}
+}

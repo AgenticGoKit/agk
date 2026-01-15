@@ -1,0 +1,49 @@
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - structcheck
+    - varcheck
+    - ineffassign
+    - deadcode
+    - typecheck
+    - stylecheck
+    - gosec
+    - unconvert
+    - dupl
+    - goconst
+    - gocyclo
+    - misspell
+    - unparam
+    - dogsled
+    - nakedret
+    - ifshort
+    - exhaustive
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  staticcheck:
+    checks: ["all"]
+  stylecheck:
+    checks: ["all"]
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-dirs:
+    - vendor
+    - node_modules
+  exclude-files:
+    - ".*_test.go"
