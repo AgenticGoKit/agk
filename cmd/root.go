@@ -1,3 +1,4 @@
+// Package cmd implements the command-line interface for AGK.
 package cmd
 
 import (
@@ -67,8 +68,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
 
 	// Bind flags to viper
-	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
-	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
+	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 }
 
 func initConfig() {

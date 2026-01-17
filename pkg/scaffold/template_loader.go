@@ -1,3 +1,4 @@
+// Package scaffold provides project scaffolding and template generation functionality.
 package scaffold
 
 import (

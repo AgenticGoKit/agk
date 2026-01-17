@@ -1,3 +1,4 @@
+// Package config handles project configuration generation and management.
 package config
 
 import (
@@ -42,14 +43,14 @@ func (g *Generator) GenerateConfig(cfg *ProjectConfig, outputPath string) error 
 
 	content := g.generateConfigContent(cfg, packageName)
 
-	if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil
 }
 
-func (g *Generator) generateConfigContent(cfg *ProjectConfig, packageName string) string {
+func (g *Generator) generateConfigContent(cfg *ProjectConfig, _ string) string {
 	description := cfg.Description
 	if description == "" {
 		description = fmt.Sprintf("AgenticGoKit project: %s", cfg.Name)

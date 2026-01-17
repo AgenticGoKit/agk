@@ -94,7 +94,7 @@ func (g *QuickstartGenerator) Generate(ctx context.Context, opts GenerateOptions
 	}
 
 	goModPath := filepath.Join(opts.ProjectPath, "go.mod")
-	if err := os.WriteFile(goModPath, []byte(goModContent), 0644); err != nil {
+	if err := os.WriteFile(goModPath, []byte(goModContent), 0600); err != nil {
 		return fmt.Errorf("failed to create go.mod: %w", err)
 	}
 
@@ -105,14 +105,16 @@ func (g *QuickstartGenerator) Generate(ctx context.Context, opts GenerateOptions
 	}
 
 	mainGoPath := filepath.Join(opts.ProjectPath, "main.go")
-	if err := os.WriteFile(mainGoPath, []byte(mainGoContent), 0644); err != nil {
+	if err := os.WriteFile(mainGoPath, []byte(mainGoContent), 0600); err != nil {
 		return fmt.Errorf("failed to create main.go: %w", err)
 	}
 
 	return nil
 }
 
-// ===== PLACEHOLDER GENERATORS =====
+// ===== GENERATORS =====
+
+// SingleAgentGenerator generates a single-agent template
 type SingleAgentGenerator struct{}
 
 func NewSingleAgentGenerator() *SingleAgentGenerator {
@@ -166,7 +168,7 @@ func (g *SingleAgentGenerator) Generate(ctx context.Context, opts GenerateOption
 		}
 
 		filePath := filepath.Join(opts.ProjectPath, fileName)
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
 			return fmt.Errorf("failed to create %s: %w", fileName, err)
 		}
 	}

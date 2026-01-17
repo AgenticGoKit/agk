@@ -199,7 +199,7 @@ func validateProjectName(name string) error {
 }
 
 // printNextSteps prints the next steps after project initialization
-func printNextSteps(projectName, projectPath string) {
+func printNextSteps(_ string, projectPath string) {
 	relPath, _ := filepath.Rel(".", projectPath)
 
 	fmt.Println(color.BlueString("📖 Next Steps:"))

@@ -1,3 +1,4 @@
+// Package scaffold provides project scaffolding and template generation functionality.
 package scaffold
 
 import (
@@ -66,7 +67,7 @@ func (s *Service) GenerateProject(ctx context.Context, opts GenerateOptions) err
 
 	// Create project directory
 	fmt.Println(color.CyanString("  ✓ Creating directory structure"))
-	if err := os.MkdirAll(opts.ProjectPath, 0755); err != nil {
+	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 

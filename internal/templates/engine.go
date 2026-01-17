@@ -1,3 +1,4 @@
+// Package templates provides template generation and rendering functionality.
 package templates
 
 import (
@@ -5,9 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/agenticgokit/agk/internal/config"
 )
+
+// capitalize converts the first letter to uppercase
+func capitalize(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
 
 // Engine handles template rendering
 type Engine struct{}
@@ -23,19 +35,19 @@ func (e *Engine) RenderWorkflow(projectPath string, cfg *config.ProjectConfig) e
 
 	// Generate workflow.go
 	workflowContent := e.generateWorkflowContent(cfg)
-	if err := os.WriteFile(filepath.Join(workflowDir, "workflow.go"), []byte(workflowContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "workflow.go"), []byte(workflowContent), 0600); err != nil {
 		return fmt.Errorf("failed to write workflow.go: %w", err)
 	}
 
 	// Generate agents.go
 	agentsContent := e.generateAgentsContent(cfg)
-	if err := os.WriteFile(filepath.Join(workflowDir, "agents.go"), []byte(agentsContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "agents.go"), []byte(agentsContent), 0600); err != nil {
 		return fmt.Errorf("failed to write agents.go: %w", err)
 	}
 
 	// Generate factory.go
 	factoryContent := e.generateFactoryContent(cfg)
-	if err := os.WriteFile(filepath.Join(workflowDir, "factory.go"), []byte(factoryContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "factory.go"), []byte(factoryContent), 0600); err != nil {
 		return fmt.Errorf("failed to write factory.go: %w", err)
 	}
 
@@ -48,7 +60,7 @@ func (e *Engine) RenderREADME(projectPath string, cfg *config.ProjectConfig) err
 
 	content := e.generateREADMEContent(cfg)
 
-	if err := os.WriteFile(readmePath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(readmePath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write README: %w", err)
 	}
 
@@ -58,6 +70,7 @@ func (e *Engine) RenderREADME(projectPath string, cfg *config.ProjectConfig) err
 func (e *Engine) generateWorkflowContent(cfg *config.ProjectConfig) string {
 	packageName := strings.ToLower(cfg.Name)
 	packageName = strings.ReplaceAll(packageName, "-", "_")
+	workflowName := capitalize(packageName)
 
 	return `package workflow
 
@@ -68,23 +81,23 @@ import (
 	"github.com/agenticgokit/agenticgokit/v1beta/core"
 )
 
-// ` + strings.Title(packageName) + `Workflow represents the main workflow
-type ` + strings.Title(packageName) + `Workflow struct {
+// ` + workflowName + `Workflow represents the main workflow
+type ` + workflowName + `Workflow struct {
 	agents map[string]core.Agent
 }
 
-// New` + strings.Title(packageName) + `Workflow creates a new workflow instance
-func New` + strings.Title(packageName) + `Workflow() (*` + strings.Title(packageName) + `Workflow, error) {
+// New` + workflowName + `Workflow creates a new workflow instance
+func New` + workflowName + `Workflow() (*` + workflowName + `Workflow, error) {
 	// TODO: Initialize agents
 	agents := make(map[string]core.Agent)
 
-	return &` + strings.Title(packageName) + `Workflow{
+	return &` + workflowName + `Workflow{
 		agents: agents,
 	}, nil
 }
 
 // Execute runs the workflow
-func (w *` + strings.Title(packageName) + `Workflow) Execute(ctx context.Context, input string) (string, error) {
+func (w *` + workflowName + `Workflow) Execute(ctx context.Context, input string) (string, error) {
 	// TODO: Implement workflow logic
 	return fmt.Sprintf("Processing: %s", input), nil
 }
@@ -149,8 +162,11 @@ func (f *Factory) CreateAgent(name string, agentType string) (core.Agent, error)
 }
 
 // CreateWorkflow creates a new workflow
-func (f *Factory) CreateWorkflow() (*` + strings.Title(strings.ReplaceAll(cfg.Name, "-", "_")) + `Workflow, error) {
-	return New` + strings.Title(strings.ReplaceAll(cfg.Name, "-", "_")) + `Workflow()
+func (f *Factory) CreateWorkflow() (*Workflow, error) {
+	workflowName := capitalize(strings.ToLower(strings.ReplaceAll("workflow", "-", "_")))
+	_ = workflowName
+	// TODO: Implement workflow creation
+	return nil, fmt.Errorf("workflow creation not yet implemented")
 }
 `
 }

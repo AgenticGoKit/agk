@@ -1,3 +1,4 @@
+// Package utils provides utility functions for file operations, error handling, and logging.
 package utils
 
 import (
@@ -21,7 +22,7 @@ func DirExists(path string) bool {
 
 // CreateDir creates a directory with all parent directories
 func CreateDir(path string) error {
-	return os.MkdirAll(path, 0755)
+	return os.MkdirAll(path, 0750)
 }
 
 // WriteFile writes content to a file, creating directories if needed
@@ -31,7 +32,7 @@ func WriteFile(path string, content []byte) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	return os.WriteFile(path, content, 0644)
+	return os.WriteFile(path, content, 0600)
 }
 
 // CopyFile copies a file from src to dst
@@ -40,13 +41,17 @@ func CopyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer sourceFile.Close()
+	defer func() {
+		_ = sourceFile.Close()
+	}()
 
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
+	defer func() {
+		_ = destFile.Close()
+	}()
 
 	_, err = io.Copy(destFile, sourceFile)
 	return err

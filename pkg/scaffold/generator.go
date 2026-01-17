@@ -32,7 +32,7 @@ func (g *Generator) GenerateStructure(ctx context.Context, projectPath string) e
 
 	for _, dir := range dirs {
 		path := filepath.Join(projectPath, dir)
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0750); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
@@ -145,7 +145,7 @@ func TestExample(t *testing.T) {
 	testPath := filepath.Join(projectPath, "test/fixtures")
 	mainTestPath := filepath.Join(projectPath, "main_test.go")
 
-	if err := os.WriteFile(mainTestPath, []byte(testMainContent), 0644); err != nil {
+	if err := os.WriteFile(mainTestPath, []byte(testMainContent), 0600); err != nil {
 		return fmt.Errorf("failed to create main_test.go: %w", err)
 	}
 
