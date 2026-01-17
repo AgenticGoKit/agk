@@ -74,7 +74,7 @@ func (g *QuickstartGenerator) GetMetadata() TemplateMetadata {
 
 func (g *QuickstartGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
 	// Create project directory
-	if err := os.MkdirAll(opts.ProjectPath, 0755); err != nil {
+	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 
@@ -133,7 +133,7 @@ func (g *SingleAgentGenerator) GetMetadata() TemplateMetadata {
 
 func (g *SingleAgentGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
 	// Create project directory
-	if err := os.MkdirAll(opts.ProjectPath, 0755); err != nil {
+	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 

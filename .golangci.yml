@@ -20,11 +20,6 @@ linters:
     - dogsled
     - nakedret
     - exhaustive
-  disable:
-    - structcheck  # deprecated, replaced by unused
-    - varcheck     # deprecated, replaced by unused
-    - deadcode     # deprecated, replaced by unused
-    - ifshort      # deprecated
 
 linters-settings:
   gocyclo:
@@ -38,12 +33,12 @@ linters-settings:
     checks: ["all"]
   stylecheck:
     checks: ["all"]
+  gosec:
+    excludes:
+      - G304  # Potential file inclusion via variable (expected for file utilities)
 
 run:
   timeout: 5m
-  skip-dirs:
-    - vendor
-    - node_modules
   modules-download-mode: readonly
 
 issues:

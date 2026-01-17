@@ -44,6 +44,7 @@ func (g *Generator) GenerateStructure(ctx context.Context, projectPath string) e
 func (g *Generator) GenerateMainGo(projectPath, projectName string) error {
 	packageName := strings.ToLower(projectName)
 	packageName = strings.ReplaceAll(packageName, "-", "_")
+	_ = packageName // Use packageName to avoid unused variable
 
 	content := `package main
 
@@ -52,7 +53,7 @@ import (
 	"log"
 
 	"github.com/agenticgokit/agenticgokit/v1beta/core"
-	"` + "github.com/" + projectName + `/workflow"
+	"github.com/example/` + projectName + `/workflow"
 )
 
 func main() {
@@ -78,7 +79,7 @@ func main() {
 `
 
 	filePath := filepath.Join(projectPath, "main.go")
-	return os.WriteFile(filePath, []byte(content), 0644)
+	return os.WriteFile(filePath, []byte(content), 0600)
 }
 
 // GenerateGoMod creates a go.mod file for the project
@@ -124,7 +125,7 @@ require (
 `
 
 	filePath := filepath.Join(projectPath, "go.mod")
-	return os.WriteFile(filePath, []byte(content), 0644)
+	return os.WriteFile(filePath, []byte(content), 0600)
 }
 
 // GenerateTestFixtures creates test files and fixtures
