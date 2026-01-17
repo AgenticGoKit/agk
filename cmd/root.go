@@ -4,17 +4,19 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/agenticgokit/agk/internal/utils"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
 )
 
 var (
 	cfgFile string
 	verbose bool
 	debug   bool
-	logger  *zap.Logger
+	logger  *zerolog.Logger
 )
 
 // rootCmd represents the base command
@@ -34,23 +36,26 @@ Features:
 
 Get started with: agk init my-project`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Initialize logger
+		// Initialize zerolog
 		var err error
-		if debug {
-			logger, err = zap.NewDevelopment()
-		} else {
-			logger, err = zap.NewProduction()
-		}
+		logger, err = utils.NewLogger(debug)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 			os.Exit(1)
 		}
+		// Set a global level as well for libraries using zerolog's package logger
+		if debug {
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		} else {
+			zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		}
+		// Ensure timestamps are enabled
+		*logger = logger.With().Timestamp().Logger()
+		// Use RFC3339 time format consistently
+		zerolog.TimeFieldFormat = time.RFC3339
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
-		// Cleanup
-		if logger != nil {
-			_ = logger.Sync()
-		}
+		// No cleanup required for zerolog
 	},
 }
 
@@ -92,9 +97,15 @@ func initConfig() {
 }
 
 // GetLogger returns the configured logger
-func GetLogger() *zap.Logger {
+func GetLogger() *zerolog.Logger {
 	if logger == nil {
-		logger, _ = zap.NewProduction()
+		if l, err := utils.NewLogger(false); err == nil {
+			logger = l
+		} else {
+			// Fallback to a basic stderr logger
+			l := zerolog.New(os.Stderr).With().Timestamp().Logger()
+			logger = &l
+		}
 	}
 	return logger
 }

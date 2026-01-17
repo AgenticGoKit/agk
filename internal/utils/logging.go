@@ -1,31 +1,47 @@
 package utils
 
 import (
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"os"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
-// NewLogger creates a new logger with the specified level
-func NewLogger(debug bool) (*zap.Logger, error) {
-	config := zap.NewProductionConfig()
+// NewLogger creates a new zerolog logger with the specified level and encoder
+func NewLogger(debug bool) (*zerolog.Logger, error) {
+	var writer = os.Stdout
+	var logger zerolog.Logger
+
+	// Configure time format globally
+	zerolog.TimeFieldFormat = time.RFC3339
 
 	if debug {
-		config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-		config.Development = true
-		config.Encoding = "console"
-		config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		// Human-friendly console output for local debugging
+		cw := zerolog.ConsoleWriter{Out: writer, TimeFormat: time.RFC3339}
+		l := zerolog.New(cw).With().Timestamp().Logger()
+		logger = l.Level(zerolog.DebugLevel)
+	} else {
+		// JSON output suitable for production/log aggregation
+		l := zerolog.New(writer).With().Timestamp().Logger()
+		logger = l.Level(zerolog.InfoLevel)
 	}
 
-	return config.Build()
+	return &logger, nil
 }
 
 // NewDevelopmentLogger creates a development logger
-func NewDevelopmentLogger() (*zap.Logger, error) {
-	return zap.NewDevelopment()
+func NewDevelopmentLogger() (*zerolog.Logger, error) {
+	zerolog.TimeFieldFormat = time.RFC3339
+	cw := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	l := zerolog.New(cw).With().Timestamp().Logger()
+	l = l.Level(zerolog.DebugLevel)
+	return &l, nil
 }
 
 // NewProductionLogger creates a production logger
-func NewProductionLogger() (*zap.Logger, error) {
-	return zap.NewProduction()
+func NewProductionLogger() (*zerolog.Logger, error) {
+	zerolog.TimeFieldFormat = time.RFC3339
+	l := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	l = l.Level(zerolog.InfoLevel)
+	return &l, nil
 }

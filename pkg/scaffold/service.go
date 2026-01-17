@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/fatih/color"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog"
 
 	"github.com/agenticgokit/agk/internal/config"
 	"github.com/agenticgokit/agk/internal/templates"
@@ -28,14 +28,14 @@ type GenerateOptions struct {
 
 // Service handles project scaffolding and generation
 type Service struct {
-	logger          *zap.Logger
+	logger          *zerolog.Logger
 	templateEngine  *templates.Engine
 	configGenerator *config.Generator
 	generator       *Generator
 }
 
 // NewService creates a new scaffold service
-func NewService(logger *zap.Logger) *Service {
+func NewService(logger *zerolog.Logger) *Service {
 	return &Service{
 		logger:          logger,
 		templateEngine:  templates.NewEngine(),
@@ -46,7 +46,9 @@ func NewService(logger *zap.Logger) *Service {
 
 // GenerateProject generates a new project with the given options
 func (s *Service) GenerateProject(ctx context.Context, opts GenerateOptions) error {
-	s.logger.Info("starting project generation", zap.String("project", opts.ProjectName))
+	if s.logger != nil {
+		s.logger.Info().Str("project", opts.ProjectName).Msg("starting project generation")
+	}
 
 	// Collect user input if interactive
 	projectConfig := &config.ProjectConfig{
@@ -114,7 +116,9 @@ func (s *Service) GenerateProject(ctx context.Context, opts GenerateOptions) err
 		return fmt.Errorf("failed to generate test fixtures: %w", err)
 	}
 
-	s.logger.Info("project generation completed successfully", zap.String("project", opts.ProjectName), zap.String("path", opts.ProjectPath))
+	if s.logger != nil {
+		s.logger.Info().Str("project", opts.ProjectName).Str("path", opts.ProjectPath).Msg("project generation completed successfully")
+	}
 	return nil
 }
 

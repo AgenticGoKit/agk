@@ -95,11 +95,7 @@ require (
 	github.com/agenticgokit/agenticgokit/v1beta v0.9.0
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.18.0
-	go.uber.org/zap v1.26.0
-)
-
-require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
+		github.com/rs/zerolog v1.33.0
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/google/uuid v1.5.0 // indirect

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/fatih/color"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 
 	"github.com/agenticgokit/agk/pkg/scaffold"
 )
@@ -123,7 +123,13 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 	// Generate project using the template generator
 	if err := generator.Generate(cmd.Context(), opts); err != nil {
 		color.Red("✗ Project generation failed: %v", err)
-		logger.Error("project generation failed", zap.Error(err))
+		if logger != nil {
+			logger.Error().Err(err).Msg("project generation failed")
+		} else {
+			// Fallback stderr
+			l := zerolog.New(os.Stderr)
+			l.Error().Err(err).Msg("project generation failed")
+		}
 		return err
 	}
 
@@ -131,7 +137,7 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 	color.Green("\n✅ Project initialized successfully!\n")
 
 	// Print next steps
-	printNextSteps(projectName, projectPath)
+	printNextSteps(projectName, projectPath, templateType, metadata)
 
 	return nil
 }
@@ -199,7 +205,7 @@ func validateProjectName(name string) error {
 }
 
 // printNextSteps prints the next steps after project initialization
-func printNextSteps(_ string, projectPath string) {
+func printNextSteps(_ string, projectPath string, templateType scaffold.TemplateType, metadata scaffold.TemplateMetadata) {
 	relPath, _ := filepath.Rel(".", projectPath)
 
 	fmt.Println(color.BlueString("📖 Next Steps:"))
@@ -210,20 +216,42 @@ func printNextSteps(_ string, projectPath string) {
 
 	fmt.Println()
 	fmt.Println(color.BlueString("📚 Project Structure:"))
-	fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
-	fmt.Printf("  • %s\n", color.CyanString("workflow/                  # Workflow logic"))
-	fmt.Printf("    - %s\n", color.CyanString("workflow.go                # Main workflow definition"))
-	fmt.Printf("    - %s\n", color.CyanString("factory.go                 # Agent/workflow factory"))
-	fmt.Printf("    - %s\n", color.CyanString("agents.go                  # Agent creation helpers"))
-	fmt.Printf("  • %s\n", color.CyanString("agk.toml                   # Project configuration"))
-	fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+
+	// Show actual structure based on template
+	switch templateType {
+	case scaffold.TemplateQuickstart:
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point with hardcoded agent config"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	case scaffold.TemplateSingleAgent:
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point with streaming support"))
+		fmt.Printf("  • %s\n", color.CyanString(".env                       # Environment variables (API keys)"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	default:
+		// Generic structure for other templates
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	}
 
 	fmt.Println()
 	fmt.Println(color.BlueString("💡 Development Tips:"))
-	fmt.Printf("  • Edit %s to configure LLM providers and agents\n", color.CyanString("agk.toml"))
-	fmt.Printf("  • Implement agents in %s\n", color.CyanString("workflow/agents.go"))
-	fmt.Printf("  • Define workflow logic in %s\n", color.CyanString("workflow/workflow.go"))
-	fmt.Printf("  • Use the framework: https://github.com/agenticgokit/agenticgokit\n")
+
+	// Template-specific tips
+	switch templateType {
+	case scaffold.TemplateQuickstart:
+		fmt.Printf("  • Edit the %s configuration in %s\n", color.CyanString("LLMConfig"), color.CyanString("main.go"))
+		fmt.Printf("  • Modify the %s to customize the agent behavior\n", color.CyanString("SystemPrompt"))
+		fmt.Printf("  • Try different LLM providers: %s, %s, %s\n",
+			color.CyanString("openai"), color.CyanString("anthropic"), color.CyanString("ollama"))
+	case scaffold.TemplateSingleAgent:
+		fmt.Printf("  • Set API keys in %s (copy from %s)\n", color.CyanString(".env"), color.CyanString(".env.example"))
+		fmt.Printf("  • Configure LLM provider and model in %s\n", color.CyanString("main.go"))
+		fmt.Printf("  • Add tools/MCP servers to extend agent capabilities\n")
+	default:
+		fmt.Printf("  • Configure your LLM provider and API keys\n")
+		fmt.Printf("  • Explore the generated code to understand the structure\n")
+	}
+
+	fmt.Printf("  • Framework docs: %s\n", color.HiBlackString("https://docs.agenticgokit.com/"))
 	fmt.Println()
 }
 
