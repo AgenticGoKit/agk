@@ -5,9 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agenticgokit/agenticgokit/observability"
 	"github.com/fatih/color"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/agenticgokit/agk/pkg/scaffold"
 )
@@ -66,15 +69,29 @@ Examples:
 
 // runInitCommand executes the init command
 func runInitCommand(cmd *cobra.Command, args []string) error {
+	// Create observability span for command execution
+	tracer := observability.GetTracer("agk-cli")
+	ctx, span := tracer.Start(cmd.Context(), "agk.init")
+	defer span.End()
+
 	// Handle --list flag
 	if initListTemplates {
+		span.SetAttributes(attribute.Bool("list_templates", true))
+		span.SetStatus(codes.Ok, "listed templates")
 		return listTemplates()
 	}
 
 	projectName := args[0]
+	span.SetAttributes(
+		attribute.String("project_name", projectName),
+		attribute.String("template", initTemplate),
+		attribute.Bool("force", initForce),
+	)
 
 	// Validate project name
 	if err := validateProjectName(projectName); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid project name")
 		color.Red("✗ Invalid project name: %v", err)
 		return err
 	}
@@ -83,21 +100,29 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 
 	// Check if path already exists
 	if _, err := os.Stat(projectPath); err == nil && !initForce {
+		err := fmt.Errorf("project directory already exists")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "directory exists")
 		color.Red("✗ Directory already exists: %s", projectPath)
 		color.Yellow("Use --force to overwrite")
-		return fmt.Errorf("project directory already exists")
+		return err
 	}
 
 	// Validate and get template type
 	templateType, err := scaffold.ValidateTemplate(initTemplate)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid template")
 		color.Red("✗ %v", err)
 		return err
 	}
+	span.SetAttributes(attribute.String("template_type", string(templateType)))
 
 	// Get template generator
 	generator, err := scaffold.GetTemplateGenerator(templateType)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to get generator")
 		color.Red("✗ Failed to get template generator: %v", err)
 		return err
 	}
@@ -121,7 +146,9 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 	color.Cyan("   Files: %d | Features: %v\n", metadata.FileCount, metadata.Features)
 
 	// Generate project using the template generator
-	if err := generator.Generate(cmd.Context(), opts); err != nil {
+	if err := generator.Generate(ctx, opts); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "generation failed")
 		color.Red("✗ Project generation failed: %v", err)
 		if logger != nil {
 			logger.Error().Err(err).Msg("project generation failed")
@@ -135,6 +162,13 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 
 	// Print success message
 	color.Green("\n✅ Project initialized successfully!\n")
+
+	// Record success metrics
+	span.SetAttributes(
+		attribute.Int("file_count", metadata.FileCount),
+		attribute.StringSlice("features", metadata.Features),
+	)
+	span.SetStatus(codes.Ok, "project initialized")
 
 	// Print next steps
 	printNextSteps(projectName, projectPath, templateType, metadata)
