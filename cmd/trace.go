@@ -1,0 +1,595 @@
+package cmd
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+// traceCmd represents the trace command
+var traceCmd = &cobra.Command{
+	Use:   "trace",
+	Short: "Manage and view execution traces",
+	Long: `Manage and view execution traces from AgenticGoKit runs.
+
+Traces are automatically stored in .agk/runs/<run-id>/ when AGK_TRACE=true.
+
+Examples:
+  agk trace list              # List all stored traces
+  agk trace show <run-id>     # Display trace details in TUI
+  agk trace view <run-id>     # Show run manifest/summary
+  agk trace export <run-id>   # Export trace for external tools
+`,
+	Run: func(cmd *cobra.Command, args []string) {
+		cmd.Help()
+	},
+}
+
+// listCmd shows all stored traces
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all stored traces",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return listTraces()
+	},
+}
+
+// showCmd displays trace details in interactive viewer
+var showCmd = &cobra.Command{
+	Use:   "show [run-id]",
+	Short: "Show trace in interactive viewer",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID := ""
+		if len(args) > 0 {
+			runID = args[0]
+		}
+		return showTrace(runID)
+	},
+}
+
+// viewCmd shows run manifest/summary
+var viewCmd = &cobra.Command{
+	Use:   "view [run-id]",
+	Short: "View run summary and manifest",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID := ""
+		if len(args) > 0 {
+			runID = args[0]
+		}
+		return viewRun(runID)
+	},
+}
+
+// exportCmd exports trace for external tools
+var exportCmd = &cobra.Command{
+	Use:   "export [run-id]",
+	Short: "Export trace for external tools",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID := ""
+		if len(args) > 0 {
+			runID = args[0]
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		return exportTraceInternal(runID, format, output)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(traceCmd)
+	traceCmd.AddCommand(listCmd)
+	traceCmd.AddCommand(showCmd)
+	traceCmd.AddCommand(viewCmd)
+	traceCmd.AddCommand(exportCmd)
+
+	// Export flags
+	exportCmd.Flags().String("format", "json", "Export format: json, jaeger, otel")
+	exportCmd.Flags().String("output", "", "Output file (default: stdout)")
+}
+
+// TraceRun represents a stored trace run
+type TraceRun struct {
+	RunID         string    `json:"run_id"`
+	Command       string    `json:"command"`
+	Status        string    `json:"status"`
+	StartTime     time.Time `json:"start_time"`
+	EndTime       time.Time `json:"end_time"`
+	Duration      float64   `json:"duration_seconds"`
+	SpanCount     int       `json:"span_count"`
+	LLMCalls      int       `json:"llm_calls"`
+	TotalTokens   int       `json:"total_tokens"`
+	EstimatedCost float64   `json:"estimated_cost"`
+}
+
+func listTraces() error {
+	runsDir := ".agk/runs"
+
+	// Create directory if it doesn't exist
+	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
+		fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+		return nil
+	}
+
+	entries, err := ioutil.ReadDir(runsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read runs directory: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+		return nil
+	}
+
+	// Parse all runs
+	var runs []TraceRun
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		manifest, err := readManifest(filepath.Join(runsDir, entry.Name()))
+		if err != nil {
+			continue // Skip runs without valid manifest
+		}
+		runs = append(runs, manifest)
+	}
+
+	if len(runs) == 0 {
+		fmt.Println("No valid traces found.")
+		return nil
+	}
+
+	// Sort by start time (newest first)
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].StartTime.After(runs[j].StartTime)
+	})
+
+	// Print table
+	fmt.Println()
+	fmt.Printf("%-40s %-12s %-8s %-10s %-10s %-12s\n",
+		"Run ID", "Command", "Status", "Duration", "LLM Calls", "Tokens")
+	fmt.Println(strings.Repeat("-", 92))
+
+	for _, run := range runs {
+		status := "✅ OK"
+		if run.Status != "completed" && run.Status != "ok" {
+			status = "❌ ERROR"
+		}
+
+		duration := fmt.Sprintf("%.2fs", run.Duration)
+		llmCalls := fmt.Sprintf("%d", run.LLMCalls)
+		tokens := fmt.Sprintf("%d", run.TotalTokens)
+
+		fmt.Printf("%-40s %-12s %-8s %-10s %-10s %-12s\n",
+			run.RunID, run.Command, status, duration, llmCalls, tokens)
+	}
+	fmt.Println()
+
+	return nil
+}
+
+func showTrace(runID string) error {
+	runsDir := ".agk/runs"
+
+	// If no run ID provided, use latest
+	if runID == "" {
+		runID = getLatestRunID(runsDir)
+		if runID == "" {
+			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+			return nil
+		}
+	}
+
+	runPath := filepath.Join(runsDir, runID)
+
+	// Check if run exists
+	if _, err := os.Stat(runPath); os.IsNotExist(err) {
+		return fmt.Errorf("trace not found: %s", runID)
+	}
+
+	// Read trace file
+	tracePath := filepath.Join(runPath, "trace.jsonl")
+	data, err := ioutil.ReadFile(tracePath)
+	if err != nil {
+		return fmt.Errorf("failed to read trace: %w", err)
+	}
+
+	// Parse spans
+	spans := parseSpans(string(data))
+	manifest, _ := readManifest(runPath)
+
+	// Display trace header
+	fmt.Println()
+	fmt.Printf("╔════════════════════════════════════════════════════════════════════════╗\n")
+	fmt.Printf("║ Run: %-50s %-18s │\n", runID, "")
+	fmt.Printf("║ Command: %-48s Status: %s │\n", manifest.Command, "✅")
+	fmt.Printf("║ Duration: %-47.2fs Spans: %d          │\n", manifest.Duration, len(spans))
+	fmt.Printf("╠════════════════════════════════════════════════════════════════════════╣\n")
+
+	// Display spans tree
+	displaySpanTree(spans)
+
+	fmt.Printf("╠════════════════════════════════════════════════════════════════════════╣\n")
+	fmt.Printf("║ LLM Calls: %d | Tokens: %d | Estimated Cost: $%.4f                    │\n",
+		manifest.LLMCalls, manifest.TotalTokens, manifest.EstimatedCost)
+	fmt.Printf("╚════════════════════════════════════════════════════════════════════════╝\n")
+	fmt.Println()
+
+	return nil
+}
+
+func viewRun(runID string) error {
+	runsDir := ".agk/runs"
+
+	// If no run ID provided, use latest
+	if runID == "" {
+		runID = getLatestRunID(runsDir)
+		if runID == "" {
+			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+			return nil
+		}
+	}
+
+	runPath := filepath.Join(runsDir, runID)
+
+	// Check if run exists
+	if _, err := os.Stat(runPath); os.IsNotExist(err) {
+		return fmt.Errorf("trace not found: %s", runID)
+	}
+
+	manifest, err := readManifest(runPath)
+	if err != nil {
+		return fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	// Display manifest
+	fmt.Println()
+	fmt.Printf("Run Information\n")
+	fmt.Println(strings.Repeat("─", 60))
+	fmt.Printf("Run ID:              %s\n", manifest.RunID)
+	fmt.Printf("Command:             %s\n", manifest.Command)
+	fmt.Printf("Status:              ✅ %s\n", manifest.Status)
+	fmt.Printf("Started:             %s\n", manifest.StartTime.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Completed:           %s\n", manifest.EndTime.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Duration:            %.2fs\n", manifest.Duration)
+	fmt.Println()
+	fmt.Printf("Execution Stats\n")
+	fmt.Println(strings.Repeat("─", 60))
+	fmt.Printf("Spans:               %d\n", manifest.SpanCount)
+	fmt.Printf("LLM Calls:           %d\n", manifest.LLMCalls)
+	fmt.Printf("Total Tokens:        %d\n", manifest.TotalTokens)
+	fmt.Printf("Estimated Cost:      $%.4f\n", manifest.EstimatedCost)
+	fmt.Println()
+	fmt.Printf("Files\n")
+	fmt.Println(strings.Repeat("─", 60))
+	fmt.Printf("Trace:               %s/trace.jsonl\n", runPath)
+	fmt.Printf("Events:              %s/events.jsonl\n", runPath)
+	fmt.Printf("Manifest:            %s/manifest.json\n", runPath)
+	fmt.Println()
+
+	return nil
+}
+
+func exportTraceInternal(runID, format, output string) error {
+	runsDir := ".agk/runs"
+
+	// If no run ID provided, use latest
+	if runID == "" {
+		runID = getLatestRunID(runsDir)
+		if runID == "" {
+			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+			return nil
+		}
+	}
+
+	runPath := filepath.Join(runsDir, runID)
+	tracePath := filepath.Join(runPath, "trace.jsonl")
+
+	// Read trace data
+	data, err := ioutil.ReadFile(tracePath)
+	if err != nil {
+		return fmt.Errorf("failed to read trace: %w", err)
+	}
+
+	// Format and export
+	var exportData interface{}
+
+	switch format {
+	case "json":
+		// Parse JSONL and create array
+		lines := strings.Split(string(data), "\n")
+		var spans []map[string]interface{}
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			var span map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &span); err != nil {
+				continue
+			}
+			spans = append(spans, span)
+		}
+		exportData = spans
+	default:
+		exportData = string(data)
+	}
+
+	// Marshal data
+	exportBytes, err := json.MarshalIndent(exportData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	// Write output
+	if output != "" {
+		if err := ioutil.WriteFile(output, exportBytes, 0644); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+		fmt.Printf("✅ Exported trace to %s\n", output)
+	} else {
+		fmt.Println(string(exportBytes))
+	}
+
+	return nil
+}
+
+// Helper functions
+
+func readManifest(runPath string) (TraceRun, error) {
+	// First try to read manifest.json if it exists
+	manifestPath := filepath.Join(runPath, "manifest.json")
+	data, err := ioutil.ReadFile(manifestPath)
+	if err == nil {
+		var manifest TraceRun
+		if err := json.Unmarshal(data, &manifest); err == nil {
+			return manifest, nil
+		}
+	}
+
+	// Fallback: parse trace.jsonl and create synthetic manifest
+	return parseTraceFile(runPath)
+}
+
+// parseTraceFile reads trace.jsonl and creates a TraceRun from the trace data
+func parseTraceFile(runPath string) (TraceRun, error) {
+	tracePath := filepath.Join(runPath, "trace.jsonl")
+	data, err := ioutil.ReadFile(tracePath)
+	if err != nil {
+		return TraceRun{}, fmt.Errorf("no trace file found: %w", err)
+	}
+
+	runID := filepath.Base(runPath)
+	spanCount := 0
+	llmCalls := 0
+	totalTokens := 0
+
+	// Parse JSONL to extract span information
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var firstSpan, lastSpan time.Time
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var span map[string]interface{}
+		if err := json.Unmarshal(line, &span); err != nil {
+			continue
+		}
+
+		spanCount++
+
+		// Check if this is an LLM span
+		if spanName, ok := span["Name"].(string); ok {
+			if strings.Contains(spanName, "llm") {
+				llmCalls++
+			}
+		}
+
+		// Extract token count from attributes
+		if attrs, ok := span["Attributes"].([]interface{}); ok {
+			for _, attr := range attrs {
+				if attrMap, ok := attr.(map[string]interface{}); ok {
+					if key, ok := attrMap["Key"].(string); ok {
+						// Look for token-related attributes
+						if key == "llm.usage.completion_tokens" || key == "llm.completion_tokens" {
+							if val, ok := attrMap["Value"].(map[string]interface{}); ok {
+								if tokenVal, ok := val["Value"]; ok {
+									if tokenInt, err := toInt64(tokenVal); err == nil {
+										totalTokens += int(tokenInt)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Extract start and end times from span
+		// Format: "2026-01-19T18:36:38.897+09:00"
+		if st, ok := span["StartTime"].(string); ok {
+			// Try to parse with timezone
+			if t, err := time.Parse(time.RFC3339, st); err == nil {
+				if firstSpan.IsZero() || t.Before(firstSpan) {
+					firstSpan = t
+				}
+				if t.After(lastSpan) {
+					lastSpan = t
+				}
+			}
+		}
+
+		// Also check EndTime to get the latest time
+		if et, ok := span["EndTime"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, et); err == nil {
+				if t.After(lastSpan) {
+					lastSpan = t
+				}
+			}
+		}
+	}
+
+	if firstSpan.IsZero() {
+		firstSpan = time.Now()
+	}
+	if lastSpan.IsZero() {
+		lastSpan = firstSpan
+	}
+
+	// Parse run ID to extract command name
+	// Format: run-{timestamp} or run-{timestamp}-{command}
+	command := "agent"
+	if parts := strings.Split(runID, "-"); len(parts) > 2 {
+		command = strings.Join(parts[2:], "-")
+	}
+
+	durationSeconds := lastSpan.Sub(firstSpan).Seconds()
+	estimatedCost := float64(totalTokens) * 0.00001 // Rough estimate
+
+	return TraceRun{
+		RunID:         runID,
+		Command:       command,
+		Status:        "completed",
+		StartTime:     firstSpan,
+		EndTime:       lastSpan,
+		Duration:      durationSeconds,
+		SpanCount:     spanCount,
+		LLMCalls:      llmCalls,
+		TotalTokens:   totalTokens,
+		EstimatedCost: estimatedCost,
+	}, nil
+}
+
+// toInt64 safely converts a value to int64
+func toInt64(v interface{}) (int64, error) {
+	switch val := v.(type) {
+	case float64:
+		return int64(val), nil
+	case int:
+		return int64(val), nil
+	case int64:
+		return val, nil
+	case string:
+		i, err := strconv.ParseInt(val, 10, 64)
+		return i, err
+	default:
+		return 0, fmt.Errorf("cannot convert %T to int64", v)
+	}
+}
+
+func getLatestRunID(runsDir string) string {
+	entries, err := ioutil.ReadDir(runsDir)
+	if err != nil {
+		return ""
+	}
+
+	var latest os.FileInfo
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "run-") {
+			if latest == nil || entry.ModTime().After(latest.ModTime()) {
+				latest = entry
+			}
+		}
+	}
+
+	if latest != nil {
+		return latest.Name()
+	}
+	return ""
+}
+
+type Span struct {
+	Name                 string                   `json:"Name"`
+	StartTime            string                   `json:"StartTime"`
+	EndTime              string                   `json:"EndTime"`
+	Attributes           []map[string]interface{} `json:"Attributes,omitempty"`
+	ParentSpanID         string                   `json:"ParentSpanId,omitempty"`
+	SpanID               string                   `json:"SpanId"`
+	SpanKind             int                      `json:"SpanKind"`
+	Status               map[string]interface{}   `json:"Status"`
+	ChildSpanCount       int                      `json:"ChildSpanCount"`
+	InstrumentationScope map[string]interface{}   `json:"InstrumentationScope"`
+}
+
+func parseSpans(data string) []Span {
+	var spans []Span
+	lines := strings.Split(data, "\n")
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var span Span
+		if err := json.Unmarshal([]byte(line), &span); err != nil {
+			continue
+		}
+		spans = append(spans, span)
+	}
+
+	return spans
+}
+
+func displaySpanTree(spans []Span) {
+	// Display spans with details
+	for i, span := range spans {
+		indent := "  "
+		prefix := "├── "
+		if i == len(spans)-1 {
+			prefix = "└── "
+		}
+
+		// Calculate duration
+		duration := "0ms"
+		if span.StartTime != "" && span.EndTime != "" {
+			startTime, _ := time.Parse(time.RFC3339, span.StartTime)
+			endTime, _ := time.Parse(time.RFC3339, span.EndTime)
+			durationMs := endTime.Sub(startTime).Milliseconds()
+			duration = fmt.Sprintf("%dms", durationMs)
+		}
+
+		// Display span name and duration
+		fmt.Printf("║ %s%s%s (%s)\n", indent, prefix, span.Name, duration)
+
+		// Display key attributes
+		if len(span.Attributes) > 0 {
+			for attrIdx, attr := range span.Attributes {
+				if key, ok := attr["Key"].(string); ok {
+					if value, ok := attr["Value"].(map[string]interface{}); ok {
+						if val, ok := value["Value"]; ok {
+							// Filter to show important attributes
+							if strings.Contains(key, "llm") || strings.Contains(key, "tokens") ||
+								strings.Contains(key, "http") || strings.Contains(key, "error") {
+								isLast := attrIdx == len(span.Attributes)-1
+								subPrefix := "├─ "
+								if isLast {
+									subPrefix = "└─ "
+								}
+								fmt.Printf("║ %s   %s%s: %v\n", indent, subPrefix, key, val)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Show span status if error
+		if span.Status != nil {
+			if code, ok := span.Status["Code"].(string); ok && code != "Ok" {
+				fmt.Printf("║ %s   └─ status: %s\n", indent, code)
+			}
+		}
+	}
+}

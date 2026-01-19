@@ -63,7 +63,12 @@ Get started with: agk init my-project`,
 		zerolog.TimeFieldFormat = time.RFC3339
 
 		// Initialize tracing if enabled
+		// Check both command flag and environment variable
 		trace = viper.GetBool("trace")
+		if !trace && os.Getenv("AGK_TRACE") == "true" {
+			trace = true
+		}
+
 		traceExporter = viper.GetString("trace_exporter")
 		traceEndpoint = viper.GetString("trace_endpoint")
 		traceSample = viper.GetFloat64("trace_sample")
@@ -79,6 +84,17 @@ Get started with: agk init my-project`,
 			ctx = observability.WithLogger(ctx, logger)
 			cmd.SetContext(ctx)
 
+			// For file exporter, create runs directory and trace file path
+			filePath := traceEndpoint
+			if traceExporter == "" || traceExporter == "file" {
+				if filePath == "" {
+					runDir := fmt.Sprintf(".agk/runs/%s", runID)
+					os.MkdirAll(runDir, 0755)
+					filePath = fmt.Sprintf("%s/trace.jsonl", runDir)
+				}
+				traceExporter = "file"
+			}
+
 			cfg := observability.TracerConfig{
 				ServiceName:    "agk-cli",
 				ServiceVersion: Version,
@@ -87,7 +103,7 @@ Get started with: agk init my-project`,
 				Exporter:       traceExporter,
 				SampleRate:     traceSample,
 				Debug:          debug,
-				FilePath:       traceEndpoint,
+				FilePath:       filePath,
 			}
 
 			tracerShutdown, err = observability.SetupTracer(ctx, cfg)
