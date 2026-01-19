@@ -306,27 +306,38 @@ func exportTraceInternal(runID, format, output string) error {
 		return fmt.Errorf("failed to read trace: %w", err)
 	}
 
-	// Format and export
+	// Parse JSONL into spans
+	lines := strings.Split(string(data), "\n")
+	var spans []map[string]interface{}
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var span map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &span); err != nil {
+			continue
+		}
+		spans = append(spans, span)
+	}
+
+	// Format and export based on format flag
 	var exportData interface{}
 
 	switch format {
 	case "json":
-		// Parse JSONL and create array
-		lines := strings.Split(string(data), "\n")
-		var spans []map[string]interface{}
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			var span map[string]interface{}
-			if err := json.Unmarshal([]byte(line), &span); err != nil {
-				continue
-			}
-			spans = append(spans, span)
-		}
+		// Raw JSONL as JSON array
 		exportData = spans
+
+	case "jaeger":
+		// Convert to Jaeger format
+		exportData = convertToJaegerFormat(spans, runID)
+
+	case "otel", "otlp":
+		// Convert to OpenTelemetry format
+		exportData = convertToOTLPFormat(spans, runID)
+
 	default:
-		exportData = string(data)
+		return fmt.Errorf("unknown format: %s (supported: json, jaeger, otel)", format)
 	}
 
 	// Marshal data
@@ -340,12 +351,106 @@ func exportTraceInternal(runID, format, output string) error {
 		if err := ioutil.WriteFile(output, exportBytes, 0644); err != nil {
 			return fmt.Errorf("failed to write file: %w", err)
 		}
-		fmt.Printf("✅ Exported trace to %s\n", output)
+		fmt.Printf("✅ Exported trace to %s (format: %s)\n", output, format)
 	} else {
 		fmt.Println(string(exportBytes))
 	}
 
 	return nil
+}
+
+// convertToJaegerFormat converts OpenTelemetry spans to Jaeger format
+func convertToJaegerFormat(spans []map[string]interface{}, runID string) map[string]interface{} {
+	jaegerSpans := make([]map[string]interface{}, 0)
+
+	for _, span := range spans {
+		jaegerSpan := map[string]interface{}{}
+
+		// Extract and map fields
+		if traceID, ok := span["SpanContext"].(map[string]interface{})["TraceID"]; ok {
+			jaegerSpan["traceID"] = traceID
+		}
+		if spanID, ok := span["SpanContext"].(map[string]interface{})["SpanID"]; ok {
+			jaegerSpan["spanID"] = spanID
+		}
+		if name, ok := span["Name"]; ok {
+			jaegerSpan["operationName"] = name
+		}
+		if startTime, ok := span["StartTime"]; ok {
+			jaegerSpan["startTime"] = startTime
+		}
+		if endTime, ok := span["EndTime"]; ok {
+			jaegerSpan["endTime"] = endTime
+		}
+
+		// Map attributes to tags
+		if attrs, ok := span["Attributes"].([]interface{}); ok {
+			tags := make([]map[string]interface{}, 0)
+			for _, attr := range attrs {
+				if attrMap, ok := attr.(map[string]interface{}); ok {
+					tag := map[string]interface{}{
+						"key":   attrMap["Key"],
+						"value": attrMap["Value"],
+					}
+					tags = append(tags, tag)
+				}
+			}
+			jaegerSpan["tags"] = tags
+		}
+
+		jaegerSpans = append(jaegerSpans, jaegerSpan)
+	}
+
+	return map[string]interface{}{
+		"traceID": getTraceID(spans),
+		"spans":   jaegerSpans,
+	}
+}
+
+// convertToOTLPFormat converts to OpenTelemetry Protocol format
+func convertToOTLPFormat(spans []map[string]interface{}, runID string) map[string]interface{} {
+	return map[string]interface{}{
+		"resourceSpans": []map[string]interface{}{
+			{
+				"resource": map[string]interface{}{
+					"attributes": []map[string]interface{}{
+						{
+							"key": "service.name",
+							"value": map[string]interface{}{
+								"stringValue": "agenticgokit",
+							},
+						},
+						{
+							"key": "service.version",
+							"value": map[string]interface{}{
+								"stringValue": "0.6.0",
+							},
+						},
+					},
+				},
+				"scopeSpans": []map[string]interface{}{
+					{
+						"scope": map[string]interface{}{
+							"name": "agenticgokit",
+						},
+						"spans": spans,
+					},
+				},
+			},
+		},
+	}
+}
+
+// getTraceID extracts the trace ID from spans
+func getTraceID(spans []map[string]interface{}) string {
+	if len(spans) > 0 {
+		if spanCtx, ok := spans[0]["SpanContext"].(map[string]interface{}); ok {
+			if traceID, ok := spanCtx["TraceID"]; ok {
+				return traceID.(string)
+			}
+		}
+	}
+	return ""
 }
 
 // Helper functions
@@ -571,7 +676,8 @@ func displaySpanTree(spans []Span) {
 						if val, ok := value["Value"]; ok {
 							// Filter to show important attributes
 							if strings.Contains(key, "llm") || strings.Contains(key, "tokens") ||
-								strings.Contains(key, "http") || strings.Contains(key, "error") {
+								strings.Contains(key, "http") || strings.Contains(key, "error") ||
+								strings.Contains(key, "tool") || strings.Contains(key, "mcp") {
 								isLast := attrIdx == len(span.Attributes)-1
 								subPrefix := "├─ "
 								if isLast {
