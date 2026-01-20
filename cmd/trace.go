@@ -674,10 +674,17 @@ func displaySpanTree(spans []Span) {
 				if key, ok := attr["Key"].(string); ok {
 					if value, ok := attr["Value"].(map[string]interface{}); ok {
 						if val, ok := value["Value"]; ok {
-							// Filter to show important attributes
-							if strings.Contains(key, "llm") || strings.Contains(key, "tokens") ||
-								strings.Contains(key, "http") || strings.Contains(key, "error") ||
-								strings.Contains(key, "tool") || strings.Contains(key, "mcp") {
+							// Filter to show important attributes for all span types
+							shouldDisplay := strings.Contains(key, "llm") ||
+								strings.Contains(key, "tokens") ||
+								strings.Contains(key, "http") ||
+								strings.Contains(key, "error") ||
+								strings.Contains(key, "tool") ||
+								strings.Contains(key, "mcp") ||
+								strings.Contains(key, "workflow") ||
+								strings.Contains(key, "subworkflow")
+
+							if shouldDisplay {
 								isLast := attrIdx == len(span.Attributes)-1
 								subPrefix := "├─ "
 								if isLast {
