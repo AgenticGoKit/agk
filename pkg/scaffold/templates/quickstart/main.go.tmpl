@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	agk "github.com/agenticgokit/agenticgokit/v1beta"
@@ -13,21 +14,23 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create a simple agent with hardcoded configuration
-	agent, err := agk.QuickChatAgentWithConfig("assistant", &agk.Config{
-		Name:         "quickstart-agent",
-		SystemPrompt: "You are a helpful AI assistant. Provide clear, concise answers.",
-		Timeout:      30 * time.Second,
-		LLM: agk.LLMConfig{
-			Provider:    "{{.LLMProvider}}",
-			Model:       "{{.LLMModel}}",
-			Temperature: 0.7,
-			MaxTokens:   1000,
-		},
-	})
+	// Get service version from environment or use default
+	serviceVersion := os.Getenv("SERVICE_VERSION")
+	if serviceVersion == "" {
+		serviceVersion = "0.1.0"
+	}
+
+	// Create a simple agent with automatic observability configuration
+	// Tracing is enabled if AGK_TRACE=true environment variable is set
+	// Usage: AGK_TRACE=true go run main.go
+	agent, err := agk.NewBuilder("{{.ProjectName}}").
+		WithLLM("{{.LLMProvider}}", "{{.LLMModel}}").
+		WithObservability("{{.ProjectName}}", serviceVersion).
+		Build()
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	defer agent.Cleanup(ctx)
 
 	// Simple conversation
 	userMessage := "What is AgenticGoKit?"
