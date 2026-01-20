@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agenticgokit/agk/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
 
@@ -25,13 +27,14 @@ var traceCmd = &cobra.Command{
 Traces are automatically stored in .agk/runs/<run-id>/ when AGK_TRACE=true.
 
 Examples:
+  agk trace                   # Launch interactive trace explorer
   agk trace list              # List all stored traces
   agk trace show <run-id>     # Display trace details in TUI
   agk trace view <run-id>     # Show run manifest/summary
   agk trace export <run-id>   # Export trace for external tools
 `,
-	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Help()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return launchTraceExplorer()
 	},
 }
 
@@ -114,6 +117,82 @@ type TraceRun struct {
 	LLMCalls      int       `json:"llm_calls"`
 	TotalTokens   int       `json:"total_tokens"`
 	EstimatedCost float64   `json:"estimated_cost"`
+}
+
+// launchTraceExplorer launches the unified trace explorer TUI
+func launchTraceExplorer() error {
+	runsDir := ".agk/runs"
+
+	// Check if directory exists
+	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
+		fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+		return nil
+	}
+
+	entries, err := ioutil.ReadDir(runsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read runs directory: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+		return nil
+	}
+
+	// Load all runs with their spans
+	var runDataList []tui.RunData
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		runPath := filepath.Join(runsDir, entry.Name())
+		manifest, err := readManifest(runPath)
+		if err != nil {
+			continue
+		}
+
+		// Read spans
+		tracePath := filepath.Join(runPath, "trace.jsonl")
+		data, err := ioutil.ReadFile(tracePath)
+		if err != nil {
+			continue
+		}
+		spans := tui.ParseSpans(string(data))
+
+		runDataList = append(runDataList, tui.RunData{
+			Manifest: tui.TraceRun{
+				RunID:         manifest.RunID,
+				Command:       manifest.Command,
+				Status:        manifest.Status,
+				Duration:      manifest.Duration,
+				SpanCount:     manifest.SpanCount,
+				LLMCalls:      manifest.LLMCalls,
+				TotalTokens:   manifest.TotalTokens,
+				EstimatedCost: manifest.EstimatedCost,
+			},
+			Spans: spans,
+		})
+	}
+
+	if len(runDataList) == 0 {
+		fmt.Println("No valid traces found.")
+		return nil
+	}
+
+	// Sort by newest first (assuming run IDs contain timestamps)
+	sort.Slice(runDataList, func(i, j int) bool {
+		return runDataList[i].Manifest.RunID > runDataList[j].Manifest.RunID
+	})
+
+	// Create and run TUI explorer
+	model := tui.NewTraceExplorer(runDataList)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("failed to run TUI: %w", err)
+	}
+
+	return nil
 }
 
 func listTraces() error {
@@ -209,26 +288,28 @@ func showTrace(runID string) error {
 		return fmt.Errorf("failed to read trace: %w", err)
 	}
 
-	// Parse spans
-	spans := parseSpans(string(data))
+	// Parse spans using TUI package
+	spans := tui.ParseSpans(string(data))
 	manifest, _ := readManifest(runPath)
 
-	// Display trace header
-	fmt.Println()
-	fmt.Printf("╔════════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║ Run: %-50s %-18s │\n", runID, "")
-	fmt.Printf("║ Command: %-48s Status: %s │\n", manifest.Command, "✅")
-	fmt.Printf("║ Duration: %-47.2fs Spans: %d          │\n", manifest.Duration, len(spans))
-	fmt.Printf("╠════════════════════════════════════════════════════════════════════════╣\n")
+	// Convert manifest to TUI format
+	tuiManifest := tui.TraceRun{
+		RunID:         manifest.RunID,
+		Command:       manifest.Command,
+		Status:        manifest.Status,
+		Duration:      manifest.Duration,
+		SpanCount:     manifest.SpanCount,
+		LLMCalls:      manifest.LLMCalls,
+		TotalTokens:   manifest.TotalTokens,
+		EstimatedCost: manifest.EstimatedCost,
+	}
 
-	// Display spans tree
-	displaySpanTree(spans)
-
-	fmt.Printf("╠════════════════════════════════════════════════════════════════════════╣\n")
-	fmt.Printf("║ LLM Calls: %d | Tokens: %d | Estimated Cost: $%.4f                    │\n",
-		manifest.LLMCalls, manifest.TotalTokens, manifest.EstimatedCost)
-	fmt.Printf("╚════════════════════════════════════════════════════════════════════════╝\n")
-	fmt.Println()
+	// Create and run TUI
+	model := tui.NewTraceViewer(runID, tuiManifest, spans)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("failed to run TUI: %w", err)
+	}
 
 	return nil
 }
