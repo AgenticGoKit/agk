@@ -210,6 +210,10 @@ func listTemplates() error {
 			templateID = "config-driven"
 		case "Advanced":
 			templateID = "advanced"
+		case "MCP-Tools":
+			templateID = "mcp-tools"
+		case "Workflow":
+			templateID = "workflow"
 		}
 		fmt.Printf("   Usage: %s\n", color.HiBlackString("agk init my-project --template %s", templateID))
 
@@ -260,6 +264,14 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point with streaming support"))
 		fmt.Printf("  • %s\n", color.CyanString(".env                       # Environment variables (API keys)"))
 		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	case scaffold.TemplateMCPTools:
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Agent with MCP server config"))
+		fmt.Printf("  • %s\n", color.CyanString("README.md                  # Documentation for MCP tools"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	case scaffold.TemplateWorkflow:
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Multi-step workflow pipeline"))
+		fmt.Printf("  • %s\n", color.CyanString("README.md                  # Documentation for workflow"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
 	default:
 		// Generic structure for other templates
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
@@ -280,6 +292,14 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 		fmt.Printf("  • Set API keys in %s (copy from %s)\n", color.CyanString(".env"), color.CyanString(".env.example"))
 		fmt.Printf("  • Configure LLM provider and model in %s\n", color.CyanString("main.go"))
 		fmt.Printf("  • Add tools/MCP servers to extend agent capabilities\n")
+	case scaffold.TemplateMCPTools:
+		fmt.Printf("  • Run %s to initialize MCP servers\n", color.CyanString("npm install"))
+		fmt.Printf("  • Add more MCP servers in %s\n", color.CyanString("main.go"))
+		fmt.Printf("  • Use %s to view traces of tool execution\n", color.CyanString("agk trace"))
+	case scaffold.TemplateWorkflow:
+		fmt.Printf("  • Add new steps in %s using .AddStep()\n", color.CyanString("main.go"))
+		fmt.Printf("  • Monitor step progress via streaming output\n")
+		fmt.Printf("  • Use %s to debug workflow execution\n", color.CyanString("agk trace"))
 	default:
 		fmt.Printf("  • Configure your LLM provider and API keys\n")
 		fmt.Printf("  • Explore the generated code to understand the structure\n")
@@ -295,7 +315,7 @@ func init() {
 	// Define flags
 	initCmd.Flags().BoolVar(&initListTemplates, "list", false, "List available templates")
 	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "quickstart",
-		"Template type: quickstart, single-agent, multi-agent, config-driven, advanced")
+		"Template type: quickstart, single-agent, multi-agent, config-driven, advanced, mcp-tools, workflow")
 	initCmd.Flags().StringVarP(&initOutputDir, "output", "o", ".", "Output directory for the project")
 	initCmd.Flags().BoolVarP(&initInteractive, "interactive", "i", false, "Enable interactive prompts")
 	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "Force overwrite existing files")

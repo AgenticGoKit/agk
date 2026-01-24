@@ -16,6 +16,8 @@ const (
 	TemplateMultiAgent   TemplateType = "multi-agent"
 	TemplateConfigDriven TemplateType = "config-driven"
 	TemplateAdvanced     TemplateType = "advanced"
+	TemplateMCPTools     TemplateType = "mcp-tools"
+	TemplateWorkflow     TemplateType = "workflow"
 )
 
 // TemplateMetadata contains information about a template
@@ -44,13 +46,15 @@ func ValidateTemplate(templateStr string) (TemplateType, error) {
 		"multi-agent":   TemplateMultiAgent,
 		"config-driven": TemplateConfigDriven,
 		"advanced":      TemplateAdvanced,
+		"mcp-tools":     TemplateMCPTools,
+		"workflow":      TemplateWorkflow,
 	}
 
 	if tt, ok := validTemplates[templateStr]; ok {
 		return tt, nil
 	}
 
-	return "", fmt.Errorf("invalid template '%s'. Valid options: quickstart, single-agent, multi-agent, config-driven, advanced", templateStr)
+	return "", fmt.Errorf("invalid template '%s'. Valid options: quickstart, single-agent, multi-agent, config-driven, advanced, mcp-tools, workflow", templateStr)
 }
 
 // GetAllTemplates returns all available templates
@@ -90,6 +94,20 @@ func GetAllTemplates() []TemplateMetadata {
 			Complexity:  "⭐⭐⭐⭐⭐",
 			FileCount:   20,
 			Features:    []string{"Agents", "Workflow", "Server", "Frontend", "WebSocket", "Docker", "TOML Config"},
+		},
+		{
+			Name:        "MCP-Tools",
+			Description: "Agent with MCP server tool integration",
+			Complexity:  "⭐⭐",
+			FileCount:   3,
+			Features:    []string{"Agent", "MCP Tools", "Streaming", "Observability"},
+		},
+		{
+			Name:        "Workflow",
+			Description: "Multi-step streaming workflow pipeline",
+			Complexity:  "⭐⭐⭐",
+			FileCount:   3,
+			Features:    []string{"Workflow", "Multi-Agent", "Streaming", "Step Tracking"},
 		},
 	}
 }

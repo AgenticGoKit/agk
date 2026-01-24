@@ -25,6 +25,12 @@ func GetTemplateGenerator(templateType TemplateType) (TemplateGenerator, error) 
 	case TemplateAdvanced:
 		return NewAdvancedGenerator(), nil
 
+	case TemplateMCPTools:
+		return NewMCPToolsGenerator(), nil
+
+	case TemplateWorkflow:
+		return NewWorkflowGenerator(), nil
+
 	default:
 		return nil, fmt.Errorf("unknown template type: %s", templateType)
 	}
@@ -240,4 +246,126 @@ func (g *AdvancedGenerator) GetMetadata() TemplateMetadata {
 func (g *AdvancedGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
 	// TODO: Phase 2 - Implement advanced generator
 	return fmt.Errorf("advanced template not yet implemented")
+}
+
+// MCPToolsGenerator generates an MCP-enabled agent template
+type MCPToolsGenerator struct{}
+
+func NewMCPToolsGenerator() *MCPToolsGenerator {
+	return &MCPToolsGenerator{}
+}
+
+func (g *MCPToolsGenerator) GetMetadata() TemplateMetadata {
+	return TemplateMetadata{
+		Name:        "MCP-Tools",
+		Description: "Agent with MCP server tool integration",
+		Complexity:  "⭐⭐",
+		FileCount:   3,
+		Features:    []string{"Agent", "MCP Tools", "Streaming", "Observability"},
+	}
+}
+
+func (g *MCPToolsGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
+	// Create project directory
+	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
+		return fmt.Errorf("failed to create project directory: %w", err)
+	}
+
+	// Prepare template data
+	data := TemplateData{
+		ProjectName: opts.ProjectName,
+		LLMModel:    getLLMModel(opts.LLMProvider),
+		LLMProvider: opts.LLMProvider,
+		Description: opts.Description,
+		AgentType:   opts.AgentType,
+	}
+
+	// Files to generate
+	files := map[string]string{
+		"go.mod":    "templates/mcp-tools/go.mod.tmpl",
+		"main.go":   "templates/mcp-tools/main.go.tmpl",
+		"README.md": "templates/mcp-tools/README.md.tmpl",
+	}
+
+	for fileName, templatePath := range files {
+		content, err := RenderTemplate(templatePath, data)
+		if err != nil {
+			return err
+		}
+
+		filePath := filepath.Join(opts.ProjectPath, fileName)
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
+			return fmt.Errorf("failed to create %s: %w", fileName, err)
+		}
+	}
+
+	return nil
+}
+
+// WorkflowGenerator generates a streaming workflow template
+type WorkflowGenerator struct{}
+
+func NewWorkflowGenerator() *WorkflowGenerator {
+	return &WorkflowGenerator{}
+}
+
+func (g *WorkflowGenerator) GetMetadata() TemplateMetadata {
+	return TemplateMetadata{
+		Name:        "Workflow",
+		Description: "Multi-step streaming workflow pipeline",
+		Complexity:  "⭐⭐⭐",
+		FileCount:   3,
+		Features:    []string{"Workflow", "Multi-Agent", "Streaming", "Step Tracking"},
+	}
+}
+
+func (g *WorkflowGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
+	// Create project directory
+	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
+		return fmt.Errorf("failed to create project directory: %w", err)
+	}
+
+	// Prepare template data
+	data := TemplateData{
+		ProjectName: opts.ProjectName,
+		LLMModel:    getLLMModel(opts.LLMProvider),
+		LLMProvider: opts.LLMProvider,
+		Description: opts.Description,
+		AgentType:   opts.AgentType,
+	}
+
+	// Files to generate
+	files := map[string]string{
+		"go.mod":    "templates/workflow/go.mod.tmpl",
+		"main.go":   "templates/workflow/main.go.tmpl",
+		"README.md": "templates/workflow/README.md.tmpl",
+	}
+
+	for fileName, templatePath := range files {
+		content, err := RenderTemplate(templatePath, data)
+		if err != nil {
+			return err
+		}
+
+		filePath := filepath.Join(opts.ProjectPath, fileName)
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
+			return fmt.Errorf("failed to create %s: %w", fileName, err)
+		}
+	}
+
+	return nil
+}
+
+// Helper to get default model for provider
+func getLLMModel(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "claude-3-sonnet-20240229"
+	case "ollama":
+		return "llama3.2"
+	case "openai":
+		return "gpt-4-turbo"
+	default:
+		return "gpt-4-turbo"
+	}
 }
