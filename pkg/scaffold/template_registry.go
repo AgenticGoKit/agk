@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+const (
+	DefaultGpt4Turbo = "gpt-4-turbo"
+)
+
 // GetTemplateGenerator returns the appropriate template generator for the given template type
 func GetTemplateGenerator(templateType TemplateType) (TemplateGenerator, error) {
 	switch templateType {
@@ -144,7 +148,7 @@ func (g *SingleAgentGenerator) Generate(ctx context.Context, opts GenerateOption
 	}
 
 	// Determine LLM model based on provider
-	llmModel := "gpt-4-turbo"
+	llmModel := DefaultGpt4Turbo
 	if opts.LLMProvider == "anthropic" {
 		llmModel = "claude-3-sonnet-20240229"
 	} else if opts.LLMProvider == "ollama" {
@@ -265,26 +269,17 @@ func (g *MCPToolsGenerator) GetMetadata() TemplateMetadata {
 	}
 }
 
-func (g *MCPToolsGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// Create project directory
+func generateTemplateFiles(opts GenerateOptions, files map[string]string) error {
 	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 
-	// Prepare template data
 	data := TemplateData{
 		ProjectName: opts.ProjectName,
 		LLMModel:    getLLMModel(opts.LLMProvider),
 		LLMProvider: opts.LLMProvider,
 		Description: opts.Description,
 		AgentType:   opts.AgentType,
-	}
-
-	// Files to generate
-	files := map[string]string{
-		"go.mod":    "templates/mcp-tools/go.mod.tmpl",
-		"main.go":   "templates/mcp-tools/main.go.tmpl",
-		"README.md": "templates/mcp-tools/README.md.tmpl",
 	}
 
 	for fileName, templatePath := range files {
@@ -300,6 +295,15 @@ func (g *MCPToolsGenerator) Generate(ctx context.Context, opts GenerateOptions) 
 	}
 
 	return nil
+}
+
+func (g *MCPToolsGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
+	files := map[string]string{
+		"go.mod":    "templates/mcp-tools/go.mod.tmpl",
+		"main.go":   "templates/mcp-tools/main.go.tmpl",
+		"README.md": "templates/mcp-tools/README.md.tmpl",
+	}
+	return generateTemplateFiles(opts, files)
 }
 
 // WorkflowGenerator generates a streaming workflow template
@@ -320,40 +324,12 @@ func (g *WorkflowGenerator) GetMetadata() TemplateMetadata {
 }
 
 func (g *WorkflowGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// Create project directory
-	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
-		return fmt.Errorf("failed to create project directory: %w", err)
-	}
-
-	// Prepare template data
-	data := TemplateData{
-		ProjectName: opts.ProjectName,
-		LLMModel:    getLLMModel(opts.LLMProvider),
-		LLMProvider: opts.LLMProvider,
-		Description: opts.Description,
-		AgentType:   opts.AgentType,
-	}
-
-	// Files to generate
 	files := map[string]string{
 		"go.mod":    "templates/workflow/go.mod.tmpl",
 		"main.go":   "templates/workflow/main.go.tmpl",
 		"README.md": "templates/workflow/README.md.tmpl",
 	}
-
-	for fileName, templatePath := range files {
-		content, err := RenderTemplate(templatePath, data)
-		if err != nil {
-			return err
-		}
-
-		filePath := filepath.Join(opts.ProjectPath, fileName)
-		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
-			return fmt.Errorf("failed to create %s: %w", fileName, err)
-		}
-	}
-
-	return nil
+	return generateTemplateFiles(opts, files)
 }
 
 // Helper to get default model for provider

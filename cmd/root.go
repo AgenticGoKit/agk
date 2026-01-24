@@ -89,7 +89,7 @@ Get started with: agk init my-project`,
 			if traceExporter == "" || traceExporter == "file" {
 				if filePath == "" {
 					runDir := fmt.Sprintf(".agk/runs/%s", runID)
-					os.MkdirAll(runDir, 0755)
+					_ = os.MkdirAll(runDir, 0750)
 					filePath = fmt.Sprintf("%s/trace.jsonl", runDir)
 				}
 				traceExporter = "file"

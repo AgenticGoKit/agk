@@ -78,7 +78,8 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 	if initListTemplates {
 		span.SetAttributes(attribute.Bool("list_templates", true))
 		span.SetStatus(codes.Ok, "listed templates")
-		return listTemplates()
+		listTemplates()
+		return nil
 	}
 
 	projectName := args[0]
@@ -177,7 +178,7 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 }
 
 // listTemplates prints all available templates with their metadata
-func listTemplates() error {
+func listTemplates() {
 	color.Cyan("\n📋 Available AgenticGoKit Templates\n")
 	color.Cyan("═══════════════════════════════════\n\n")
 
@@ -223,7 +224,7 @@ func listTemplates() error {
 	}
 
 	fmt.Println()
-	return nil
+	fmt.Println()
 }
 
 // validateProjectName validates the project name format
@@ -243,7 +244,7 @@ func validateProjectName(name string) error {
 }
 
 // printNextSteps prints the next steps after project initialization
-func printNextSteps(_ string, projectPath string, templateType scaffold.TemplateType, metadata scaffold.TemplateMetadata) {
+func printNextSteps(_ string, projectPath string, templateType scaffold.TemplateType, _ scaffold.TemplateMetadata) {
 	relPath, _ := filepath.Rel(".", projectPath)
 
 	fmt.Println(color.BlueString("📖 Next Steps:"))
@@ -272,6 +273,12 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Multi-step workflow pipeline"))
 		fmt.Printf("  • %s\n", color.CyanString("README.md                  # Documentation for workflow"))
 		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
+	case scaffold.TemplateMultiAgent, scaffold.TemplateConfigDriven, scaffold.TemplateAdvanced:
+		// Complex templates structure
+		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
+		fmt.Printf("  • %s\n", color.CyanString("config/                    # Configuration files"))
+		fmt.Printf("  • %s\n", color.CyanString("agents/                    # Agent definitions"))
+		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
 	default:
 		// Generic structure for other templates
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
@@ -297,9 +304,15 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 		fmt.Printf("  • Add more MCP servers in %s\n", color.CyanString("main.go"))
 		fmt.Printf("  • Use %s to view traces of tool execution\n", color.CyanString("agk trace"))
 	case scaffold.TemplateWorkflow:
-		fmt.Printf("  • Add new steps in %s using .AddStep()\n", color.CyanString("main.go"))
+		fmt.Printf("  • Add new step in %s using .AddStep()\n", color.CyanString("main.go"))
 		fmt.Printf("  • Monitor step progress via streaming output\n")
 		fmt.Printf("  • Use %s to debug workflow execution\n", color.CyanString("agk trace"))
+	case scaffold.TemplateMultiAgent:
+		fmt.Printf("  • Define agents in %s\n", color.CyanString("agents/"))
+		fmt.Printf("  • Configure orchestration in %s\n", color.CyanString("main.go"))
+	case scaffold.TemplateConfigDriven, scaffold.TemplateAdvanced:
+		fmt.Printf("  • Modify configuration in %s\n", color.CyanString("config/"))
+		fmt.Printf("  • Extend functionality by adding new modules\n")
 	default:
 		fmt.Printf("  • Configure your LLM provider and API keys\n")
 		fmt.Printf("  • Explore the generated code to understand the structure\n")

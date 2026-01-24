@@ -27,7 +27,7 @@ func main() {
 	// - Can be customized via env vars: AGK_TRACE_EXPORTER, AGK_TRACE_ENDPOINT, AGK_TRACE_SAMPLE
 	// Usage: AGK_TRACE=true go run main.go
 	agent, err := agk.NewBuilder("{{.ProjectName}}").
-		WithLLM("{{.LLMProvider}}", "{{.LLMModel}}").
+
 		WithObservability("{{.ProjectName}}", serviceVersion).
 		WithConfig(&agk.Config{
 			Name:         "{{.ProjectName}}",

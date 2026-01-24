@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
+
+const runsDirName = ".agk/runs"
 
 // traceCmd represents the trace command
 var traceCmd = &cobra.Command{
@@ -121,7 +122,7 @@ type TraceRun struct {
 
 // launchTraceExplorer launches the unified trace explorer TUI
 func launchTraceExplorer() error {
-	runsDir := ".agk/runs"
+	runsDir := runsDirName
 
 	// Check if directory exists
 	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
@@ -129,7 +130,7 @@ func launchTraceExplorer() error {
 		return nil
 	}
 
-	entries, err := ioutil.ReadDir(runsDir)
+	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		return fmt.Errorf("failed to read runs directory: %w", err)
 	}
@@ -154,7 +155,7 @@ func launchTraceExplorer() error {
 
 		// Read spans
 		tracePath := filepath.Join(runPath, "trace.jsonl")
-		data, err := ioutil.ReadFile(tracePath)
+		data, err := os.ReadFile(tracePath)
 		if err != nil {
 			continue
 		}
@@ -196,7 +197,7 @@ func launchTraceExplorer() error {
 }
 
 func listTraces() error {
-	runsDir := ".agk/runs"
+	runsDir := runsDirName
 
 	// Create directory if it doesn't exist
 	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
@@ -204,7 +205,7 @@ func listTraces() error {
 		return nil
 	}
 
-	entries, err := ioutil.ReadDir(runsDir)
+	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		return fmt.Errorf("failed to read runs directory: %w", err)
 	}
@@ -263,7 +264,7 @@ func listTraces() error {
 }
 
 func showTrace(runID string) error {
-	runsDir := ".agk/runs"
+	runsDir := runsDirName
 
 	// If no run ID provided, use latest
 	if runID == "" {
@@ -283,7 +284,7 @@ func showTrace(runID string) error {
 
 	// Read trace file
 	tracePath := filepath.Join(runPath, "trace.jsonl")
-	data, err := ioutil.ReadFile(tracePath)
+	data, err := os.ReadFile(tracePath)
 	if err != nil {
 		return fmt.Errorf("failed to read trace: %w", err)
 	}
@@ -315,7 +316,7 @@ func showTrace(runID string) error {
 }
 
 func viewRun(runID string) error {
-	runsDir := ".agk/runs"
+	runsDir := runsDirName
 
 	// If no run ID provided, use latest
 	if runID == "" {
@@ -367,7 +368,7 @@ func viewRun(runID string) error {
 }
 
 func exportTraceInternal(runID, format, output string) error {
-	runsDir := ".agk/runs"
+	runsDir := runsDirName
 
 	// If no run ID provided, use latest
 	if runID == "" {
@@ -382,7 +383,7 @@ func exportTraceInternal(runID, format, output string) error {
 	tracePath := filepath.Join(runPath, "trace.jsonl")
 
 	// Read trace data
-	data, err := ioutil.ReadFile(tracePath)
+	data, err := os.ReadFile(tracePath)
 	if err != nil {
 		return fmt.Errorf("failed to read trace: %w", err)
 	}
@@ -429,7 +430,7 @@ func exportTraceInternal(runID, format, output string) error {
 
 	// Write output
 	if output != "" {
-		if err := ioutil.WriteFile(output, exportBytes, 0644); err != nil {
+		if err := os.WriteFile(output, exportBytes, 0600); err != nil {
 			return fmt.Errorf("failed to write file: %w", err)
 		}
 		fmt.Printf("✅ Exported trace to %s (format: %s)\n", output, format)
@@ -441,7 +442,7 @@ func exportTraceInternal(runID, format, output string) error {
 }
 
 // convertToJaegerFormat converts OpenTelemetry spans to Jaeger format
-func convertToJaegerFormat(spans []map[string]interface{}, runID string) map[string]interface{} {
+func convertToJaegerFormat(spans []map[string]interface{}, _ string) map[string]interface{} {
 	jaegerSpans := make([]map[string]interface{}, 0)
 
 	for _, span := range spans {
@@ -489,7 +490,7 @@ func convertToJaegerFormat(spans []map[string]interface{}, runID string) map[str
 }
 
 // convertToOTLPFormat converts to OpenTelemetry Protocol format
-func convertToOTLPFormat(spans []map[string]interface{}, runID string) map[string]interface{} {
+func convertToOTLPFormat(spans []map[string]interface{}, _ string) map[string]interface{} {
 	return map[string]interface{}{
 		"resourceSpans": []map[string]interface{}{
 			{
@@ -539,7 +540,7 @@ func getTraceID(spans []map[string]interface{}) string {
 func readManifest(runPath string) (TraceRun, error) {
 	// First try to read manifest.json if it exists
 	manifestPath := filepath.Join(runPath, "manifest.json")
-	data, err := ioutil.ReadFile(manifestPath)
+	data, err := os.ReadFile(manifestPath)
 	if err == nil {
 		var manifest TraceRun
 		if err := json.Unmarshal(data, &manifest); err == nil {
@@ -552,21 +553,19 @@ func readManifest(runPath string) (TraceRun, error) {
 }
 
 // parseTraceFile reads trace.jsonl and creates a TraceRun from the trace data
+// parseTraceFile reads trace.jsonl and creates a TraceRun from the trace data
 func parseTraceFile(runPath string) (TraceRun, error) {
 	tracePath := filepath.Join(runPath, "trace.jsonl")
-	data, err := ioutil.ReadFile(tracePath)
+	data, err := os.ReadFile(tracePath)
 	if err != nil {
 		return TraceRun{}, fmt.Errorf("no trace file found: %w", err)
 	}
 
 	runID := filepath.Base(runPath)
-	spanCount := 0
-	llmCalls := 0
-	totalTokens := 0
+	stats := &RunStats{}
 
 	// Parse JSONL to extract span information
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	var firstSpan, lastSpan time.Time
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -574,65 +573,14 @@ func parseTraceFile(runPath string) (TraceRun, error) {
 		if err := json.Unmarshal(line, &span); err != nil {
 			continue
 		}
-
-		spanCount++
-
-		// Check if this is an LLM span
-		if spanName, ok := span["Name"].(string); ok {
-			if strings.Contains(spanName, "llm") {
-				llmCalls++
-			}
-		}
-
-		// Extract token count from attributes
-		if attrs, ok := span["Attributes"].([]interface{}); ok {
-			for _, attr := range attrs {
-				if attrMap, ok := attr.(map[string]interface{}); ok {
-					if key, ok := attrMap["Key"].(string); ok {
-						// Look for token-related attributes
-						if key == "llm.usage.completion_tokens" || key == "llm.completion_tokens" {
-							if val, ok := attrMap["Value"].(map[string]interface{}); ok {
-								if tokenVal, ok := val["Value"]; ok {
-									if tokenInt, err := toInt64(tokenVal); err == nil {
-										totalTokens += int(tokenInt)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Extract start and end times from span
-		// Format: "2026-01-19T18:36:38.897+09:00"
-		if st, ok := span["StartTime"].(string); ok {
-			// Try to parse with timezone
-			if t, err := time.Parse(time.RFC3339, st); err == nil {
-				if firstSpan.IsZero() || t.Before(firstSpan) {
-					firstSpan = t
-				}
-				if t.After(lastSpan) {
-					lastSpan = t
-				}
-			}
-		}
-
-		// Also check EndTime to get the latest time
-		if et, ok := span["EndTime"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, et); err == nil {
-				if t.After(lastSpan) {
-					lastSpan = t
-				}
-			}
-		}
+		stats.Update(span)
 	}
 
-	if firstSpan.IsZero() {
-		firstSpan = time.Now()
+	if stats.FirstSpan.IsZero() {
+		stats.FirstSpan = time.Now()
 	}
-	if lastSpan.IsZero() {
-		lastSpan = firstSpan
+	if stats.LastSpan.IsZero() {
+		stats.LastSpan = stats.FirstSpan
 	}
 
 	// Parse run ID to extract command name
@@ -642,21 +590,92 @@ func parseTraceFile(runPath string) (TraceRun, error) {
 		command = strings.Join(parts[2:], "-")
 	}
 
-	durationSeconds := lastSpan.Sub(firstSpan).Seconds()
-	estimatedCost := float64(totalTokens) * 0.00001 // Rough estimate
+	durationSeconds := stats.LastSpan.Sub(stats.FirstSpan).Seconds()
+	estimatedCost := float64(stats.TotalTokens) * 0.00001 // Rough estimate
 
 	return TraceRun{
 		RunID:         runID,
 		Command:       command,
 		Status:        "completed",
-		StartTime:     firstSpan,
-		EndTime:       lastSpan,
+		StartTime:     stats.FirstSpan,
+		EndTime:       stats.LastSpan,
 		Duration:      durationSeconds,
-		SpanCount:     spanCount,
-		LLMCalls:      llmCalls,
-		TotalTokens:   totalTokens,
+		SpanCount:     stats.SpanCount,
+		LLMCalls:      stats.LLMCalls,
+		TotalTokens:   stats.TotalTokens,
 		EstimatedCost: estimatedCost,
 	}, nil
+}
+
+type RunStats struct {
+	SpanCount   int
+	LLMCalls    int
+	TotalTokens int
+	FirstSpan   time.Time
+	LastSpan    time.Time
+}
+
+func (s *RunStats) Update(span map[string]interface{}) {
+	s.SpanCount++
+
+	// Check if this is an LLM span
+	if spanName, ok := span["Name"].(string); ok {
+		if strings.Contains(spanName, "llm") {
+			s.LLMCalls++
+		}
+	}
+
+	// Extract token count from attributes
+	if attrs, ok := span["Attributes"].([]interface{}); ok {
+		s.extractTokens(attrs)
+	}
+
+	// Extract start and end times
+	s.updateTimes(span)
+}
+
+func (s *RunStats) extractTokens(attrs []interface{}) {
+	for _, attr := range attrs {
+		if attrMap, ok := attr.(map[string]interface{}); ok {
+			if key, ok := attrMap["Key"].(string); ok {
+				// Look for token-related attributes
+				if key == "llm.usage.completion_tokens" || key == "llm.completion_tokens" {
+					if val, ok := attrMap["Value"].(map[string]interface{}); ok {
+						if tokenVal, ok := val["Value"]; ok {
+							if tokenInt, err := toInt64(tokenVal); err == nil {
+								s.TotalTokens += int(tokenInt)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func (s *RunStats) updateTimes(span map[string]interface{}) {
+	// Extract start and end times from span
+	// Format: "2026-01-19T18:36:38.897+09:00"
+	if st, ok := span["StartTime"].(string); ok {
+		// Try to parse with timezone
+		if t, err := time.Parse(time.RFC3339, st); err == nil {
+			if s.FirstSpan.IsZero() || t.Before(s.FirstSpan) {
+				s.FirstSpan = t
+			}
+			if t.After(s.LastSpan) {
+				s.LastSpan = t
+			}
+		}
+	}
+
+	// Also check EndTime to get the latest time
+	if et, ok := span["EndTime"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, et); err == nil {
+			if t.After(s.LastSpan) {
+				s.LastSpan = t
+			}
+		}
+	}
 }
 
 // toInt64 safely converts a value to int64
@@ -677,16 +696,20 @@ func toInt64(v interface{}) (int64, error) {
 }
 
 func getLatestRunID(runsDir string) string {
-	entries, err := ioutil.ReadDir(runsDir)
+	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		return ""
 	}
 
 	var latest os.FileInfo
 	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
 		if entry.IsDir() && strings.HasPrefix(entry.Name(), "run-") {
-			if latest == nil || entry.ModTime().After(latest.ModTime()) {
-				latest = entry
+			if latest == nil || info.ModTime().After(latest.ModTime()) {
+				latest = info
 			}
 		}
 	}
@@ -708,82 +731,4 @@ type Span struct {
 	Status               map[string]interface{}   `json:"Status"`
 	ChildSpanCount       int                      `json:"ChildSpanCount"`
 	InstrumentationScope map[string]interface{}   `json:"InstrumentationScope"`
-}
-
-func parseSpans(data string) []Span {
-	var spans []Span
-	lines := strings.Split(data, "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var span Span
-		if err := json.Unmarshal([]byte(line), &span); err != nil {
-			continue
-		}
-		spans = append(spans, span)
-	}
-
-	return spans
-}
-
-func displaySpanTree(spans []Span) {
-	// Display spans with details
-	for i, span := range spans {
-		indent := "  "
-		prefix := "├── "
-		if i == len(spans)-1 {
-			prefix = "└── "
-		}
-
-		// Calculate duration
-		duration := "0ms"
-		if span.StartTime != "" && span.EndTime != "" {
-			startTime, _ := time.Parse(time.RFC3339, span.StartTime)
-			endTime, _ := time.Parse(time.RFC3339, span.EndTime)
-			durationMs := endTime.Sub(startTime).Milliseconds()
-			duration = fmt.Sprintf("%dms", durationMs)
-		}
-
-		// Display span name and duration
-		fmt.Printf("║ %s%s%s (%s)\n", indent, prefix, span.Name, duration)
-
-		// Display key attributes
-		if len(span.Attributes) > 0 {
-			for attrIdx, attr := range span.Attributes {
-				if key, ok := attr["Key"].(string); ok {
-					if value, ok := attr["Value"].(map[string]interface{}); ok {
-						if val, ok := value["Value"]; ok {
-							// Filter to show important attributes for all span types
-							shouldDisplay := strings.Contains(key, "llm") ||
-								strings.Contains(key, "tokens") ||
-								strings.Contains(key, "http") ||
-								strings.Contains(key, "error") ||
-								strings.Contains(key, "tool") ||
-								strings.Contains(key, "mcp") ||
-								strings.Contains(key, "workflow") ||
-								strings.Contains(key, "subworkflow")
-
-							if shouldDisplay {
-								isLast := attrIdx == len(span.Attributes)-1
-								subPrefix := "├─ "
-								if isLast {
-									subPrefix = "└─ "
-								}
-								fmt.Printf("║ %s   %s%s: %v\n", indent, subPrefix, key, val)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Show span status if error
-		if span.Status != nil {
-			if code, ok := span.Status["Code"].(string); ok && code != "Ok" {
-				fmt.Printf("║ %s   └─ status: %s\n", indent, code)
-			}
-		}
-	}
 }

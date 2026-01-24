@@ -34,6 +34,14 @@ var (
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Background(primaryColor).
 			Padding(0, 2)
+
+	// SectionHeaderStyle for detail view sections
+	SectionHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(secondaryColor).
+				Padding(0, 1).
+				Margin(1, 0, 0, 0)
 )
 
 // Text styles

@@ -8,6 +8,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const (
+	StatusUnset = "Unset"
+	CtrlC       = "ctrl+c"
+	KeyUp       = "up"
+	KeyDown     = "down"
+)
+
 // ViewMode represents the current viewing mode
 type ViewMode int
 
@@ -61,62 +68,78 @@ type Model struct {
 	top3Slowest   []*SpanNode
 }
 
+func calculateMetrics(nodes []*SpanNode) (totalTokens int, errorCount int, slowest *SpanNode, top3 []*SpanNode) {
+	calc := &MetricsCalculator{
+		Top3: make([]*SpanNode, 0, 3),
+	}
+
+	for _, node := range nodes {
+		calc.ProcessNode(node)
+	}
+
+	return calc.TotalTokens, calc.ErrorCount, calc.Slowest, calc.Top3
+}
+
+type MetricsCalculator struct {
+	TotalTokens int
+	ErrorCount  int
+	Slowest     *SpanNode
+	Top3        []*SpanNode
+}
+
+func (mc *MetricsCalculator) ProcessNode(node *SpanNode) {
+	attrs := node.Span.GetAllAttributes()
+
+	// Count tokens (from various possible attribute names)
+	if tokens, ok := attrs["agk.stream.tokens"]; ok {
+		if t, ok := tokens.(float64); ok {
+			mc.TotalTokens += int(t)
+		}
+	}
+	if tokens, ok := attrs["llm.usage.total_tokens"]; ok {
+		if t, ok := tokens.(float64); ok {
+			mc.TotalTokens += int(t)
+		}
+	}
+
+	// Count errors
+	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset && node.Span.Status.Code != "Ok" {
+		mc.ErrorCount++
+	}
+
+	// Track slowest spans (only leaf nodes or LLM spans)
+	if !node.HasChildren() || strings.Contains(strings.ToLower(node.Span.Name), "llm") {
+		if mc.Slowest == nil || node.DurationMs > mc.Slowest.DurationMs {
+			mc.Slowest = node
+		}
+		mc.updateTop3(node)
+	}
+}
+
+func (mc *MetricsCalculator) updateTop3(node *SpanNode) {
+	inserted := false
+	for i, s := range mc.Top3 {
+		if node.DurationMs > s.DurationMs {
+			// Insert at position i
+			mc.Top3 = append(mc.Top3[:i], append([]*SpanNode{node}, mc.Top3[i:]...)...)
+			inserted = true
+			break
+		}
+	}
+	if !inserted && len(mc.Top3) < 3 {
+		mc.Top3 = append(mc.Top3, node)
+	}
+	if len(mc.Top3) > 3 {
+		mc.Top3 = mc.Top3[:3]
+	}
+}
+
 // NewTraceViewer creates a new trace viewer model
 func NewTraceViewer(runID string, manifest TraceRun, spans []Span) Model {
 	roots := BuildSpanTree(spans)
 	visible := FlattenTree(roots)
 
-	// Compute metrics from spans
-	var totalTokens int
-	var errorCount int
-	var slowest *SpanNode
-	top3 := make([]*SpanNode, 0, 3)
-
-	for _, node := range visible {
-		attrs := node.Span.GetAllAttributes()
-
-		// Count tokens (from various possible attribute names)
-		if tokens, ok := attrs["agk.stream.tokens"]; ok {
-			if t, ok := tokens.(float64); ok {
-				totalTokens += int(t)
-			}
-		}
-		if tokens, ok := attrs["llm.usage.total_tokens"]; ok {
-			if t, ok := tokens.(float64); ok {
-				totalTokens += int(t)
-			}
-		}
-
-		// Count errors
-		if node.Span.Status.Code != "" && node.Span.Status.Code != "Unset" && node.Span.Status.Code != "Ok" {
-			errorCount++
-		}
-
-		// Track slowest spans (only leaf nodes or LLM spans)
-		if !node.HasChildren() || strings.Contains(strings.ToLower(node.Span.Name), "llm") {
-			if slowest == nil || node.DurationMs > slowest.DurationMs {
-				slowest = node
-			}
-			// Insert into top 3
-			inserted := false
-			for i, s := range top3 {
-				if node.DurationMs > s.DurationMs {
-					// Insert at position i
-					top3 = append(top3[:i], append([]*SpanNode{node}, top3[i:]...)...)
-					inserted = true
-					break
-				}
-			}
-			if !inserted && len(top3) < 3 {
-				top3 = append(top3, node)
-			}
-			if len(top3) > 3 {
-				top3 = top3[:3]
-			}
-		}
-	}
-
-	// Estimate cost (rough: $0.002 per 1K tokens for GPT-3.5 class)
+	totalTokens, errorCount, slowest, top3 := calculateMetrics(visible)
 	estimatedCost := float64(totalTokens) * 0.000002
 
 	return Model{
@@ -170,55 +193,8 @@ func (m *Model) loadRun(index int) {
 
 // computeMetrics calculates metrics for the current run
 func (m *Model) computeMetrics() {
-	var totalTokens int
-	var errorCount int
-	var slowest *SpanNode
-	top3 := make([]*SpanNode, 0, 3)
-
-	for _, node := range m.visibleNodes {
-		attrs := node.Span.GetAllAttributes()
-
-		if tokens, ok := attrs["agk.stream.tokens"]; ok {
-			if t, ok := tokens.(float64); ok {
-				totalTokens += int(t)
-			}
-		}
-		if tokens, ok := attrs["llm.usage.total_tokens"]; ok {
-			if t, ok := tokens.(float64); ok {
-				totalTokens += int(t)
-			}
-		}
-
-		if node.Span.Status.Code != "" && node.Span.Status.Code != "Unset" && node.Span.Status.Code != "Ok" {
-			errorCount++
-		}
-
-		if !node.HasChildren() || strings.Contains(strings.ToLower(node.Span.Name), "llm") {
-			if slowest == nil || node.DurationMs > slowest.DurationMs {
-				slowest = node
-			}
-			inserted := false
-			for i, s := range top3 {
-				if node.DurationMs > s.DurationMs {
-					top3 = append(top3[:i], append([]*SpanNode{node}, top3[i:]...)...)
-					inserted = true
-					break
-				}
-			}
-			if !inserted && len(top3) < 3 {
-				top3 = append(top3, node)
-			}
-			if len(top3) > 3 {
-				top3 = top3[:3]
-			}
-		}
-	}
-
-	m.totalTokens = totalTokens
-	m.estimatedCost = float64(totalTokens) * 0.000002
-	m.errorCount = errorCount
-	m.slowestSpan = slowest
-	m.top3Slowest = top3
+	m.totalTokens, m.errorCount, m.slowestSpan, m.top3Slowest = calculateMetrics(m.visibleNodes)
+	m.estimatedCost = float64(m.totalTokens) * 0.000002
 }
 
 // Init initializes the model
@@ -262,15 +238,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // updateRunListView handles input in run list view
 func (m Model) updateRunListView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "q", CtrlC:
 		return m, tea.Quit
 
-	case "up", "k":
+	case KeyUp, "k":
 		if m.runCursor > 0 {
 			m.runCursor--
 		}
 
-	case "down", "j":
+	case KeyDown, "j":
 		if m.runCursor < len(m.allRuns)-1 {
 			m.runCursor++
 		}
@@ -298,55 +274,17 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-
-	case "down", "j":
-		if m.cursor < len(m.visibleNodes)-1 {
-			m.cursor++
-		}
+	case KeyUp, "k", KeyDown, "j":
+		m = m.handleTreeNavigation(msg.String())
 
 	case "enter", "l", "right":
-		if m.cursor < len(m.visibleNodes) {
-			node := m.visibleNodes[m.cursor]
-			if node.HasChildren() {
-				node.ToggleExpanded()
-				m.visibleNodes = FlattenTree(m.roots)
-			} else {
-				// Show detail view for leaf nodes
-				m.viewMode = DetailView
-				m.updateDetailViewport()
-			}
-		}
+		m = m.handleTreeSelection()
 
 	case "h", "left":
-		if m.cursor < len(m.visibleNodes) {
-			node := m.visibleNodes[m.cursor]
-			if node.HasChildren() && node.Expanded {
-				node.Expanded = false
-				m.visibleNodes = FlattenTree(m.roots)
-			} else if node.Parent != nil {
-				// Navigate to parent
-				for i, n := range m.visibleNodes {
-					if n == node.Parent {
-						m.cursor = i
-						break
-					}
-				}
-			}
-		}
+		m = m.handleTreeCollapse()
 
 	case " ":
-		// Toggle expand/collapse with space
-		if m.cursor < len(m.visibleNodes) {
-			node := m.visibleNodes[m.cursor]
-			if node.HasChildren() {
-				node.ToggleExpanded()
-				m.visibleNodes = FlattenTree(m.roots)
-			}
-		}
+		m = m.handleTreeToggle()
 
 	case "d":
 		// Show details
@@ -355,15 +293,82 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateDetailViewport()
 		}
 
-	case "[":
+	case "[", "]":
+		m = m.handleRunSwitching(msg.String())
+	}
+
+	return m, nil
+}
+
+func (m Model) handleTreeNavigation(key string) Model {
+	switch key {
+	case KeyUp, "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case KeyDown, "j":
+		if m.cursor < len(m.visibleNodes)-1 {
+			m.cursor++
+		}
+	}
+	return m
+}
+
+func (m Model) handleTreeSelection() Model {
+	if m.cursor < len(m.visibleNodes) {
+		node := m.visibleNodes[m.cursor]
+		if node.HasChildren() {
+			node.ToggleExpanded()
+			m.visibleNodes = FlattenTree(m.roots)
+		} else {
+			// Show detail view for leaf nodes
+			m.viewMode = DetailView
+			m.updateDetailViewport()
+		}
+	}
+	return m
+}
+
+func (m Model) handleTreeCollapse() Model {
+	if m.cursor < len(m.visibleNodes) {
+		node := m.visibleNodes[m.cursor]
+		if node.HasChildren() && node.Expanded {
+			node.Expanded = false
+			m.visibleNodes = FlattenTree(m.roots)
+		} else if node.Parent != nil {
+			// Navigate to parent
+			for i, n := range m.visibleNodes {
+				if n == node.Parent {
+					m.cursor = i
+					break
+				}
+			}
+		}
+	}
+	return m
+}
+
+func (m Model) handleTreeToggle() Model {
+	// Toggle expand/collapse with space
+	if m.cursor < len(m.visibleNodes) {
+		node := m.visibleNodes[m.cursor]
+		if node.HasChildren() {
+			node.ToggleExpanded()
+			m.visibleNodes = FlattenTree(m.roots)
+		}
+	}
+	return m
+}
+
+func (m Model) handleRunSwitching(key string) Model {
+	if key == "[" {
 		// Previous run
 		if len(m.allRuns) > 0 && m.selectedRun > 0 {
 			m.selectedRun--
 			m.runCursor = m.selectedRun
 			m.loadRun(m.selectedRun)
 		}
-
-	case "]":
+	} else if key == "]" {
 		// Next run
 		if len(m.allRuns) > 0 && m.selectedRun < len(m.allRuns)-1 {
 			m.selectedRun++
@@ -371,8 +376,7 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadRun(m.selectedRun)
 		}
 	}
-
-	return m, nil
+	return m
 }
 
 func (m Model) updateDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -406,32 +410,61 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	var content strings.Builder
+
+	// 1. Global Header
+	content.WriteString(m.renderGlobalHeader())
+	content.WriteString("\n")
+
+	// 2. Main Content
+	var mainContent string
 	switch m.viewMode {
 	case RunListView:
-		return m.renderRunListView()
+		mainContent = m.renderRunListView()
 	case TreeView:
-		return m.renderTreeView()
+		mainContent = m.renderTreeView()
 	case DetailView:
-		return m.renderDetailView()
+		mainContent = m.renderDetailView()
 	default:
-		return m.renderRunListView()
+		mainContent = m.renderRunListView()
 	}
+	content.WriteString(mainContent)
+	content.WriteString("\n\n")
+
+	// 3. Global Footer / Help
+	// For now, let's let render methods handle their content but WITHOUT the header.
+	// And wrap everything in BoxStyle here.
+
+	return BoxStyle.Width(m.width - 2).Render(content.String())
+}
+
+func (m Model) renderGlobalHeader() string {
+	var b strings.Builder
+
+	// Main Title
+	b.WriteString(TitleStyle.Render("AgenticGoKit Trace Explorer"))
+
+	// If a run is selected, show its context in the header too?
+	// Or keeps it simple. User said "fixed header".
+
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", m.width-6))
+
+	return b.String()
 }
 
 func (m Model) renderRunListView() string {
 	var b strings.Builder
 
-	// Title
-	b.WriteString(HeaderStyle.Render("Trace Runs"))
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", m.width-6))
-	b.WriteString("\n\n")
+	// HEADER REMOVED
 
 	if len(m.allRuns) == 0 {
+		b.WriteString("\n")
 		b.WriteString(MutedStyle.Render("No traces found. Run with AGK_TRACE=true to generate traces."))
 		b.WriteString("\n")
 	} else {
 		// Calculate visible area
+		// Adjust height for header (approx 2 lines) and footer/padding
 		maxVisible := m.height - 8
 		if maxVisible < 5 {
 			maxVisible = 5
@@ -481,27 +514,28 @@ func (m Model) renderRunListView() string {
 	}
 
 	b.WriteString("\n\n")
-	// Help bar
+	// Help bar (keeping here for now as it changes per view)
 	help := HelpKeyStyle.Render("[↑↓]") + " Navigate  " +
 		HelpKeyStyle.Render("[Enter]") + " View spans  " +
 		HelpKeyStyle.Render("[q]") + " Quit"
 	b.WriteString(HelpStyle.Render(help))
 
-	return BoxStyle.Width(m.width - 2).Render(b.String())
+	return b.String() // Return raw string, View() wraps it
 }
 
 func (m Model) renderTreeView() string {
 	var b strings.Builder
 
-	// Back indicator if we have multiple runs
+	// Back indicator
 	if len(m.allRuns) > 0 {
 		backHint := MutedStyle.Render(fmt.Sprintf("[Esc] Back to list  |  Run %d/%d", m.selectedRun+1, len(m.allRuns)))
 		b.WriteString(backHint)
 		b.WriteString("\n")
 	}
 
-	// Header
-	header := m.renderHeader()
+	// Run Details Header (Specific to this view)
+	// We keep this as "sub-header"
+	header := m.renderRunSummary() // Renamed from renderHeader to avoid confusion
 	b.WriteString(header)
 	b.WriteString("\n")
 
@@ -514,14 +548,14 @@ func (m Model) renderTreeView() string {
 	b.WriteString("\n")
 	b.WriteString(help)
 
-	return BoxStyle.Width(m.width - 2).Render(b.String())
+	return b.String()
 }
 
-func (m Model) renderHeader() string {
+func (m Model) renderRunSummary() string { // Previously renderHeader
 	var lines []string
 
 	// Title line with run ID
-	title := fmt.Sprintf("Trace: %s", m.runID)
+	title := fmt.Sprintf("Run: %s", m.runID) // Simplified since we have global header
 	lines = append(lines, HeaderStyle.Render(title))
 
 	// Status indicator
@@ -693,73 +727,128 @@ func (m Model) renderDetailView() string {
 	b.WriteString("\n")
 	b.WriteString(HelpStyle.Render(help))
 
-	return BoxStyle.Width(m.width - 2).Render(b.String())
+	return b.String()
 }
 
 func (m Model) renderDetailContent(node *SpanNode) string {
 	var b strings.Builder
 
-	// Basic info
-	b.WriteString(AttributeKeyStyle.Render("Duration: "))
-	b.WriteString(DurationStyle.Render(fmt.Sprintf("%dms", node.DurationMs)))
-	b.WriteString("\n")
+	// --- Hero Section (Overview) ---
+	b.WriteString(m.renderOverviewSection(node))
 
-	b.WriteString(AttributeKeyStyle.Render("Status: "))
-	if node.Span.Status.Code == "" || node.Span.Status.Code == "Unset" || node.Span.Status.Code == "Ok" {
-		b.WriteString(SuccessStyle.Render("OK"))
-	} else {
-		b.WriteString(ErrorStyle.Render(node.Span.Status.Code))
-	}
-	b.WriteString("\n")
-
-	b.WriteString(AttributeKeyStyle.Render("Span ID: "))
-	b.WriteString(MutedStyle.Render(node.Span.SpanContext.SpanID))
-	b.WriteString("\n")
-
-	if node.Parent != nil {
-		b.WriteString(AttributeKeyStyle.Render("Parent ID: "))
-		b.WriteString(MutedStyle.Render(node.Span.Parent.SpanID))
-		b.WriteString("\n")
-	}
-
-	b.WriteString("\n")
-
-	// Attributes section
-	attrs := node.Span.GetAllAttributes()
-	if len(attrs) > 0 {
-		b.WriteString(HeaderStyle.Render("Attributes"))
-		b.WriteString("\n")
-		b.WriteString(strings.Repeat("─", 40))
-		b.WriteString("\n")
-
-		// Sort keys for consistent display
-		keys := make([]string, 0, len(attrs))
-		for k := range attrs {
-			keys = append(keys, k)
-		}
-		// Simple sort
-		for i := 0; i < len(keys)-1; i++ {
-			for j := i + 1; j < len(keys); j++ {
-				if keys[i] > keys[j] {
-					keys[i], keys[j] = keys[j], keys[i]
-				}
-			}
-		}
-
-		for _, key := range keys {
-			val := attrs[key]
-			keyStyled := AttributeKeyStyle.Render(fmt.Sprintf("  %s: ", key))
-			valStyled := AttributeValueStyle.Render(fmt.Sprintf("%v", val))
-			b.WriteString(keyStyled)
-			b.WriteString(valStyled)
-			b.WriteString("\n")
-		}
-	} else {
-		b.WriteString(MutedStyle.Render("No attributes"))
-		b.WriteString("\n")
-	}
+	// --- Attributes Grouping ---
+	b.WriteString(m.renderAttributeSection(node))
 
 	return b.String()
+}
+
+func (m Model) renderOverviewSection(node *SpanNode) string {
+	var b strings.Builder
+	b.WriteString(SectionHeaderStyle.Render("Overview"))
+	b.WriteString("\n")
+
+	// Grid layout for basic stats
+	stats := []struct {
+		Label string
+		Value string
+	}{
+		{"Duration", DurationStyle.Render(fmt.Sprintf("%dms", node.DurationMs))},
+		{"Status", func() string {
+			if node.Span.Status.Code == "" || node.Span.Status.Code == "Unset" || node.Span.Status.Code == "Ok" {
+				return SuccessStyle.Render("OK")
+			}
+			return ErrorStyle.Render(node.Span.Status.Code)
+		}()},
+		{"Span ID", MutedStyle.Render(node.Span.SpanContext.SpanID)},
+		{"Parent ID", func() string {
+			if node.Parent != nil {
+				return MutedStyle.Render(node.Span.Parent.SpanID)
+			}
+			return MutedStyle.Render("-")
+		}()},
+	}
+
+	for _, stat := range stats {
+		b.WriteString(fmt.Sprintf("%-15s %s\n", AttributeKeyStyle.Render(stat.Label+":"), stat.Value))
+	}
+	return b.String()
+}
+
+func (m Model) renderAttributeSection(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+	if len(attrs) == 0 {
+		b.WriteString(SectionHeaderStyle.Render("Attributes"))
+		b.WriteString("\n")
+		b.WriteString(MutedStyle.Render("  No attributes available"))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// Group attributes
+	var (
+		llmAttrs      = make(map[string]interface{})
+		workflowAttrs = make(map[string]interface{})
+		httpAttrs     = make(map[string]interface{})
+		otherAttrs    = make(map[string]interface{})
+	)
+
+	for k, v := range attrs {
+		if strings.HasPrefix(k, "agk.llm.") || strings.HasPrefix(k, "llm.") {
+			llmAttrs[k] = v
+		} else if strings.HasPrefix(k, "agk.workflow.") || strings.HasPrefix(k, "workflow.") {
+			workflowAttrs[k] = v
+		} else if strings.HasPrefix(k, "http.") {
+			httpAttrs[k] = v
+		} else {
+			otherAttrs[k] = v
+		}
+	}
+
+	m.renderAttributeGroup(&b, "LLM Configuration", llmAttrs)
+	m.renderAttributeGroup(&b, "Workflow Context", workflowAttrs)
+	m.renderAttributeGroup(&b, "HTTP Details", httpAttrs)
+	m.renderAttributeGroup(&b, "Metadata", otherAttrs)
+
+	return b.String()
+}
+
+func (m Model) renderAttributeGroup(b *strings.Builder, title string, group map[string]interface{}) {
+	if len(group) == 0 {
+		return
+	}
+	b.WriteString(SectionHeaderStyle.Render(title))
+	b.WriteString("\n")
+
+	// Sort keys
+	keys := make([]string, 0, len(group))
+	for k := range group {
+		keys = append(keys, k)
+	}
+	// Simple sort
+	for i := 0; i < len(keys)-1; i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i] > keys[j] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+
+	for _, key := range keys {
+		val := group[key]
+		// Clean up key display
+		displayKey := key
+		if strings.Contains(key, ".") {
+			parts := strings.Split(key, ".")
+			displayKey = parts[len(parts)-1] // Show only the last part
+		}
+
+		keyStyled := AttributeKeyStyle.Render(fmt.Sprintf("  %-20s", displayKey))
+		valStyled := AttributeValueStyle.Render(fmt.Sprintf("%v", val))
+		b.WriteString(keyStyled)
+		b.WriteString(valStyled)
+		b.WriteString("\n")
+	}
 }
 
 func (m Model) renderHelpBar() string {
