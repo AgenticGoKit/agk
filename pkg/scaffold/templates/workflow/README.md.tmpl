@@ -1,0 +1,84 @@
+# {{.ProjectName}} - Streaming Workflow
+
+An AgenticGoKit streaming workflow with multiple sequential steps.
+
+## Features
+
+- **Multi-Step Workflow**: Chain multiple agents in sequence
+- **Real-Time Streaming**: See output as each step processes
+- **Step Tracking**: Monitor progress through workflow stages
+- **Observability**: Built-in tracing with `AGK_TRACE=true`
+
+## Workflow Pipeline
+
+```
+[Input] → [Research] → [Summarize] → [Format] → [Output]
+```
+
+1. **Research**: Gathers detailed information on the topic
+2. **Summarize**: Condenses research into key points
+3. **Format**: Creates a professional formatted report
+
+## Quick Start
+
+```bash
+# Install dependencies
+go mod tidy
+
+# Set your API key
+export OPENAI_API_KEY=your-key-here
+# OR for Ollama (no API key needed)
+# Just make sure Ollama is running
+
+# Run with tracing
+AGK_TRACE=true go run main.go
+```
+
+## Customizing the Workflow
+
+### Add a new step
+
+```go
+.AddStep("analyze", agk.NewBuilder("analyzer").
+    WithLLM("{{.LLMProvider}}", "{{.LLMModel}}").
+    WithConfig(&agk.Config{
+        SystemPrompt: "Your analysis prompt here...",
+    }).MustBuild())
+```
+
+### Change step order
+
+Reorder the `.AddStep()` calls in the workflow builder chain.
+
+### Parallel execution
+
+Use `.AddParallelSteps()` for concurrent processing:
+
+```go
+.AddParallelSteps(
+    agk.Step{Name: "step1", Agent: agent1},
+    agk.Step{Name: "step2", Agent: agent2},
+)
+```
+
+## Viewing Traces
+
+```bash
+# Install agk CLI
+go install github.com/agenticgokit/agk@latest
+
+# View traces interactively
+agk trace
+
+# View specific run
+agk trace show <run-id>
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AGK_TRACE` | Enable tracing | `false` |
+| `OPENAI_API_KEY` | OpenAI API key | - |
+| `ANTHROPIC_API_KEY` | Anthropic API key | - |
+| `SERVICE_VERSION` | Service version for traces | `0.1.0` |

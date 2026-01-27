@@ -1,0 +1,53 @@
+# {{.ProjectName}} - MCP Tools Agent
+
+An AgenticGoKit agent with MCP (Model Context Protocol) tool integration.
+
+## Features
+
+- **MCP Tool Support**: Access external tools via MCP servers
+- **Streaming**: Real-time response streaming
+- **Observability**: Built-in tracing with `AGK_TRACE=true`
+
+## Quick Start
+
+```bash
+# Install dependencies
+go mod tidy
+
+# Set your API key
+export OPENAI_API_KEY=your-key-here
+# OR for Ollama (no API key needed)
+# export LLM_PROVIDER=ollama
+
+# Run with tracing
+AGK_TRACE=true go run main.go
+```
+
+## Available MCP Servers
+
+1. **filesystem**: Read/write files and directories
+2. **fetch**: Make HTTP requests
+3. **brave-search**: Web search (requires BRAVE_API_KEY)
+4. **memory**: Persistent key-value storage
+
+## Adding More Tools
+
+Edit `main.go` and add more MCP servers to the `Servers` slice:
+
+```go
+{
+    Name:    "your-server",
+    Command: "npx",
+    Args:    []string{"-y", "@your-org/mcp-server"},
+}
+```
+
+## Viewing Traces
+
+```bash
+# Install agk CLI
+go install github.com/agenticgokit/agk@latest
+
+# View traces
+agk trace
+```

@@ -736,6 +736,9 @@ func (m Model) renderDetailContent(node *SpanNode) string {
 	// --- Hero Section (Overview) ---
 	b.WriteString(m.renderOverviewSection(node))
 
+	// --- Content Section (Audit Data - prompts, responses) ---
+	b.WriteString(m.renderContentSection(node))
+
 	// --- Attributes Grouping ---
 	b.WriteString(m.renderAttributeSection(node))
 
@@ -771,6 +774,71 @@ func (m Model) renderOverviewSection(node *SpanNode) string {
 	for _, stat := range stats {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", AttributeKeyStyle.Render(stat.Label+":"), stat.Value))
 	}
+	return b.String()
+}
+
+// renderContentSection displays audit content (prompts, responses, tool args)
+// Only shown when detailed trace data is available (AGK_TRACE_LEVEL=detailed)
+func (m Model) renderContentSection(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+
+	// Content keys to look for
+	contentKeys := []struct {
+		Key   string
+		Icon  string
+		Label string
+	}{
+		{"agk.prompt.user", "📝", "User Prompt"},
+		{"agk.prompt.system", "🖥️", "System Prompt"},
+		{"agk.llm.response", "🤖", "LLM Response"},
+		{"agk.tool.arguments", "📥", "Tool Arguments"},
+		{"agk.tool.result", "📤", "Tool Result"},
+	}
+
+	// Check if any content is available
+	hasContent := false
+	for _, ck := range contentKeys {
+		if _, ok := attrs[ck.Key]; ok {
+			hasContent = true
+			break
+		}
+	}
+
+	if !hasContent {
+		return ""
+	}
+
+	b.WriteString("\n")
+	b.WriteString(SectionHeaderStyle.Render("Content (Detailed Trace)"))
+	b.WriteString("\n")
+
+	for _, ck := range contentKeys {
+		if val, ok := attrs[ck.Key]; ok {
+			content := fmt.Sprintf("%v", val)
+
+			// Header with icon
+			b.WriteString(fmt.Sprintf("\n%s ", ck.Icon))
+			b.WriteString(AttributeKeyStyle.Render(ck.Label))
+			b.WriteString("\n")
+			b.WriteString(MutedStyle.Render(strings.Repeat("─", 40)))
+			b.WriteString("\n")
+
+			// Content (truncate if too long)
+			maxLen := 500
+			if len(content) > maxLen {
+				content = content[:maxLen-3] + "..."
+				b.WriteString(content)
+				b.WriteString("\n")
+				b.WriteString(MutedStyle.Render("[truncated]"))
+			} else {
+				b.WriteString(content)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
 	return b.String()
 }
 
