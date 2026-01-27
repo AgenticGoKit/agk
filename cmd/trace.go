@@ -314,7 +314,7 @@ func showTrace(runID string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -351,8 +351,8 @@ func showTrace(runID string) error {
 		EstimatedCost: manifest.EstimatedCost,
 	}
 
-	// Create and run TUI
-	model := tui.NewTraceViewer(runID, tuiManifest, spans)
+	// Create and run TUI with hot reload support
+	model := tui.NewTraceViewerWithPath(runID, tuiManifest, spans, tracePath)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("failed to run TUI: %w", err)
@@ -366,7 +366,7 @@ func viewRun(runID string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -418,7 +418,7 @@ func exportTraceInternal(runID, format, output string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -741,8 +741,8 @@ func toInt64(v interface{}) (int64, error) {
 	}
 }
 
-func getLatestRunID(runsDir string) string {
-	entries, err := os.ReadDir(runsDir)
+func getLatestRunID() string {
+	entries, err := os.ReadDir(runsDirName)
 	if err != nil {
 		return ""
 	}
@@ -785,7 +785,7 @@ func auditTrace(runID string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -826,7 +826,7 @@ func generateMermaid(runID, output string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil

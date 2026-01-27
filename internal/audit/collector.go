@@ -1,3 +1,4 @@
+// Package audit provides types and utilities for extracting evaluation data from traces.
 package audit
 
 import (
@@ -89,6 +90,10 @@ func (c *Collector) Collect() (*TraceObject, error) {
 			obj.Summary.ToolCallCount++
 		case EventTypeLLMCall:
 			obj.Summary.LLMCallCount++
+		case EventTypeObservation:
+			// Observations are counted as part of tool calls
+		case EventTypeDecision:
+			// Decisions are workflow-level events
 		}
 
 		// Check for detailed data

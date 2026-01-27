@@ -1,12 +1,18 @@
 package tui
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// tickMsg is sent periodically to check for file updates
+type tickMsg time.Time
 
 const (
 	StatusUnset = "Unset"
@@ -66,6 +72,11 @@ type Model struct {
 	errorCount    int
 	slowestSpan   *SpanNode
 	top3Slowest   []*SpanNode
+	// Hot reload / file watching
+	tracePath  string    // Path to trace file being watched
+	lastOffset int64     // Bytes read so far
+	isLive     bool      // Whether we're watching for updates
+	lastUpdate time.Time // Last time file was updated
 }
 
 func calculateMetrics(nodes []*SpanNode) (totalTokens int, errorCount int, slowest *SpanNode, top3 []*SpanNode) {
@@ -136,11 +147,24 @@ func (mc *MetricsCalculator) updateTop3(node *SpanNode) {
 
 // NewTraceViewer creates a new trace viewer model
 func NewTraceViewer(runID string, manifest TraceRun, spans []Span) Model {
+	return NewTraceViewerWithPath(runID, manifest, spans, "")
+}
+
+// NewTraceViewerWithPath creates a trace viewer with hot reload support
+func NewTraceViewerWithPath(runID string, manifest TraceRun, spans []Span, tracePath string) Model {
 	roots := BuildSpanTree(spans)
 	visible := FlattenTree(roots)
 
 	totalTokens, errorCount, slowest, top3 := calculateMetrics(visible)
 	estimatedCost := float64(totalTokens) * 0.000002
+
+	// Calculate initial file offset if path provided
+	var lastOffset int64
+	if tracePath != "" {
+		if info, err := os.Stat(tracePath); err == nil {
+			lastOffset = info.Size()
+		}
+	}
 
 	return Model{
 		runID:         runID,
@@ -154,6 +178,10 @@ func NewTraceViewer(runID string, manifest TraceRun, spans []Span) Model {
 		errorCount:    errorCount,
 		slowestSpan:   slowest,
 		top3Slowest:   top3,
+		tracePath:     tracePath,
+		lastOffset:    lastOffset,
+		isLive:        tracePath != "",
+		lastUpdate:    time.Now(),
 	}
 }
 
@@ -199,7 +227,17 @@ func (m *Model) computeMetrics() {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
+	if m.isLive && m.tracePath != "" {
+		return m.tickCmd()
+	}
 	return nil
+}
+
+// tickCmd returns a command that sends a tick after 500ms
+func (m Model) tickCmd() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 // Update handles messages
@@ -207,6 +245,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tickMsg:
+		// Check for file updates
+		if m.isLive && m.tracePath != "" {
+			if newSpans := m.checkFileUpdates(); len(newSpans) > 0 {
+				// Add new spans and rebuild tree
+				m = m.addNewSpans(newSpans)
+				m.lastUpdate = time.Now()
+			}
+			return m, m.tickCmd()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch m.viewMode {
 		case RunListView:
@@ -233,6 +283,80 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
+}
+
+// checkFileUpdates reads new lines from the trace file
+func (m *Model) checkFileUpdates() []Span {
+	info, err := os.Stat(m.tracePath)
+	if err != nil {
+		return nil
+	}
+
+	// No new data
+	if info.Size() <= m.lastOffset {
+		return nil
+	}
+
+	// Open file and seek to last position
+	file, err := os.Open(m.tracePath)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = file.Close() }()
+
+	if _, err := file.Seek(m.lastOffset, 0); err != nil {
+		return nil
+	}
+
+	// Read new lines
+	var newLines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			newLines = append(newLines, line)
+		}
+	}
+
+	// Update offset
+	m.lastOffset = info.Size()
+
+	// Parse new spans
+	if len(newLines) == 0 {
+		return nil
+	}
+
+	return ParseSpans(strings.Join(newLines, "\n"))
+}
+
+// addNewSpans adds new spans to the existing tree
+func (m Model) addNewSpans(newSpans []Span) Model {
+	// Get all existing spans
+	existingSpans := m.collectAllSpans()
+
+	// Add new spans
+	allSpans := append(existingSpans, newSpans...)
+
+	// Rebuild tree
+	m.roots = BuildSpanTree(allSpans)
+	m.visibleNodes = FlattenTree(m.roots)
+
+	// Update metrics
+	m.computeMetrics()
+
+	// Update manifest span count
+	m.manifest.SpanCount = len(allSpans)
+
+	return m
+}
+
+// collectAllSpans extracts all spans from the tree
+func (m Model) collectAllSpans() []Span {
+	var spans []Span
+	for _, node := range m.visibleNodes {
+		spans = append(spans, node.Span)
+	}
+	return spans
 }
 
 // updateRunListView handles input in run list view
@@ -442,7 +566,11 @@ func (m Model) renderGlobalHeader() string {
 	var b strings.Builder
 
 	// Main Title
-	b.WriteString(TitleStyle.Render("AgenticGoKit Trace Explorer"))
+	title := "AgenticGoKit Trace Explorer"
+	if m.isLive {
+		title = "🔴 LIVE  " + title
+	}
+	b.WriteString(TitleStyle.Render(title))
 
 	// If a run is selected, show its context in the header too?
 	// Or keeps it simple. User said "fixed header".
