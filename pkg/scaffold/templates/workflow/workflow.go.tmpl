@@ -1,0 +1,29 @@
+package workflow
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/agenticgokit/agenticgokit/v1beta/core"
+)
+
+// {{.WorkflowName}}Workflow represents the main workflow
+type {{.WorkflowName}}Workflow struct {
+	agents map[string]core.Agent
+}
+
+// New{{.WorkflowName}}Workflow creates a new workflow instance
+func New{{.WorkflowName}}Workflow() (*{{.WorkflowName}}Workflow, error) {
+	// TODO: Initialize agents
+	agents := make(map[string]core.Agent)
+
+	return &{{.WorkflowName}}Workflow{
+		agents: agents,
+	}, nil
+}
+
+// Execute runs the workflow
+func (w *{{.WorkflowName}}Workflow) Execute(ctx context.Context, input string) (string, error) {
+	// TODO: Implement workflow logic
+	return fmt.Sprintf("Processing: %s", input), nil
+}

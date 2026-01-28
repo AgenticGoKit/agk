@@ -1,0 +1,44 @@
+package workflow
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/agenticgokit/agenticgokit/v1beta/core"
+)
+
+// Factory handles workflow component creation
+type Factory struct {
+	llmProvider string
+	model       string
+}
+
+// NewFactory creates a new workflow factory
+func NewFactory(llmProvider, model string) *Factory {
+	return &Factory{
+		llmProvider: llmProvider,
+		model:       model,
+	}
+}
+
+// CreateAgent creates an agent with the given configuration
+func (f *Factory) CreateAgent(name string, agentType string) (core.Agent, error) {
+	// TODO: Implement agent creation based on type
+	return nil, fmt.Errorf("agent type %s not implemented", agentType)
+}
+
+// capitalize converts the first letter to uppercase
+func capitalize(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// CreateWorkflow creates a new workflow
+func (f *Factory) CreateWorkflow() (*Workflow, error) {
+	workflowName := capitalize(strings.ToLower(strings.ReplaceAll("workflow", "-", "_")))
+	_ = workflowName
+	// TODO: Implement workflow creation
+	return nil, fmt.Errorf("workflow creation not yet implemented")
+}

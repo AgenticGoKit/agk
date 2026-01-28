@@ -8,124 +8,164 @@ import (
 	"time"
 
 	agk "github.com/agenticgokit/agenticgokit/v1beta"
+	_ "github.com/agenticgokit/agenticgokit/plugins/llm/{{.LLMProvider}}"
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	// Get service version from environment or use default
-	serviceVersion := os.Getenv("SERVICE_VERSION")
-	if serviceVersion == "" {
-		serviceVersion = "0.1.0"
-	}
+	fmt.Println("🚀 Creating {{.ProjectName}} Workflow...")
+	fmt.Println("=====================================")
 
-	// Create a streaming workflow with multiple steps
-	// Each step is an agent that processes and transforms the input
-	// Steps run sequentially, with each step's output feeding into the next
-
-	fmt.Println("Creating Streaming Workflow...")
-	fmt.Println("================================")
-
-	// Create workflow using the builder pattern
-	workflow, err := agk.NewWorkflow("{{.ProjectName}}").
-		WithObservability("{{.ProjectName}}", serviceVersion).
-		// Step 1: Research - gather information
-		AddStep("research", agk.NewBuilder("researcher").
-
-			WithConfig(&agk.Config{
-				SystemPrompt: "You are a research assistant. When given a topic, provide detailed, factual information about it. Include key concepts, important details, and relevant context.",
-				LLM: agk.LLMConfig{
-					Provider:    "{{.LLMProvider}}",
-					Model:       "{{.LLMModel}}",
-					Temperature: 0.7,
-					MaxTokens:   2000,
-				},
-			}).MustBuild()).
-		// Step 2: Summarize - condense the research
-		AddStep("summarize", agk.NewBuilder("summarizer").
-
-			WithConfig(&agk.Config{
-				SystemPrompt: "You are a summarization expert. Take the provided content and create a clear, concise summary that captures the key points. Use bullet points for clarity.",
-				LLM: agk.LLMConfig{
-					Provider:    "{{.LLMProvider}}",
-					Model:       "{{.LLMModel}}",
-					Temperature: 0.5,
-					MaxTokens:   1000,
-				},
-			}).MustBuild()).
-		// Step 3: Format - create final output
-		AddStep("format", agk.NewBuilder("formatter").
-
-			WithConfig(&agk.Config{
-				SystemPrompt: "You are a content formatter. Take the provided summary and format it as a professional report with sections, headers, and clear structure.",
-				LLM: agk.LLMConfig{
-					Provider:    "{{.LLMProvider}}",
-					Model:       "{{.LLMModel}}",
-					Temperature: 0.3,
-					MaxTokens:   1500,
-				},
-			}).MustBuild()).
-		Build()
-
+	// Create a sequential workflow with multiple agents
+	// Tracing is handled at the workflow level (set AGK_TRACE=true)
+	workflow, err := agk.NewSequentialWorkflow(&agk.WorkflowConfig{
+		Mode:    agk.Sequential,
+		Timeout: 180 * time.Second,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
-	defer workflow.Cleanup(ctx)
+
+	// Create agents for each step
+	// Note: Observability/tracing is handled by the workflow - no need to add WithObservability to agents
+	researcherConfig := &agk.Config{
+		Name:         "researcher",
+		SystemPrompt: "You are a research assistant. When given a topic, provide detailed, factual information about it. Include key concepts, important details, and relevant context.",
+		Timeout:      60 * time.Second,
+		LLM: agk.LLMConfig{
+			Provider:    "{{.LLMProvider}}",
+			Model:       "{{.LLMModel}}",
+			Temperature: 0.7,
+			MaxTokens:   2000,
+			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
+		},
+	}
+
+	researcher, err := agk.NewBuilder("researcher").
+		WithConfig(researcherConfig).
+		Build()
+	if err != nil {
+		log.Fatalf("Failed to create researcher agent: %v", err)
+	}
+
+	summarizerConfig := &agk.Config{
+		Name:         "summarizer",
+		SystemPrompt: "You are a summarization expert. Take the provided content and create a clear, concise summary that captures the key points. Use bullet points for clarity.",
+		Timeout:      60 * time.Second,
+		LLM: agk.LLMConfig{
+			Provider:    "{{.LLMProvider}}",
+			Model:       "{{.LLMModel}}",
+			Temperature: 0.5,
+			MaxTokens:   1000,
+			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
+		},
+	}
+
+	summarizer, err := agk.NewBuilder("summarizer").
+		WithConfig(summarizerConfig).
+		Build()
+	if err != nil {
+		log.Fatalf("Failed to create summarizer agent: %v", err)
+	}
+
+	formatterConfig := &agk.Config{
+		Name:         "formatter",
+		SystemPrompt: "You are a content formatter. Take the provided summary and format it as a professional report with sections, headers, and clear structure.",
+		Timeout:      60 * time.Second,
+		LLM: agk.LLMConfig{
+			Provider:    "{{.LLMProvider}}",
+			Model:       "{{.LLMModel}}",
+			Temperature: 0.3,
+			MaxTokens:   1500,
+			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
+		},
+	}
+
+	formatter, err := agk.NewBuilder("formatter").
+		WithConfig(formatterConfig).
+		Build()
+	if err != nil {
+		log.Fatalf("Failed to create formatter agent: %v", err)
+	}
+
+	// Add steps to the workflow
+	// Step 1: Research - gather information
+	if err := workflow.AddStep(agk.WorkflowStep{
+		Name:  "research",
+		Agent: researcher,
+	}); err != nil {
+		log.Fatalf("Failed to add research step: %v", err)
+	}
+
+	// Step 2: Summarize - condense the research
+	if err := workflow.AddStep(agk.WorkflowStep{
+		Name:  "summarize",
+		Agent: summarizer,
+	}); err != nil {
+		log.Fatalf("Failed to add summarize step: %v", err)
+	}
+
+	// Step 3: Format - create final output
+	if err := workflow.AddStep(agk.WorkflowStep{
+		Name:  "format",
+		Agent: formatter,
+	}); err != nil {
+		log.Fatalf("Failed to add format step: %v", err)
+	}
+
+	// Initialize the workflow
+	if err := workflow.Initialize(ctx); err != nil {
+		log.Fatalf("Failed to initialize workflow: %v", err)
+	}
+	defer workflow.Shutdown(ctx)
 
 	// Run the workflow with streaming
 	topic := "artificial intelligence in healthcare"
-	fmt.Printf("\nTopic: %s\n\n", topic)
+	fmt.Printf("\n📋 Topic: %s\n\n", topic)
 
-	// Stream the workflow execution
+	// Show observability hint
+	fmt.Println("💡 Tip: Enable tracing with: AGK_TRACE=true AGK_TRACE_EXPORTER=file")
+	fmt.Println("📡 Streaming workflow execution:")
+	fmt.Println("─────────────────────────────────")
+
 	stream, err := workflow.RunStream(ctx, topic)
 	if err != nil {
 		log.Fatalf("Failed to start workflow: %v", err)
 	}
 
 	// Track progress through steps
-	currentStep := ""
-	totalChunks := 0
-	stepOutputs := make(map[string]int)
-
 	for chunk := range stream.Chunks() {
 		if chunk.Error != nil {
-			fmt.Printf("\nError: %v\n", chunk.Error)
+			fmt.Printf("\n❌ Error: %v\n", chunk.Error)
 			break
 		}
 
 		switch chunk.Type {
-		case agk.ChunkTypeStepStart:
-			currentStep = chunk.StepName
-			fmt.Printf("\n[Step: %s]\n", currentStep)
-			fmt.Println(string(make([]byte, 40)))
-
+		case agk.ChunkTypeAgentStart:
+			if stepName, ok := chunk.Metadata["step_name"].(string); ok {
+				fmt.Printf("\n\n🔹 [Step: %s]\n", stepName)
+				fmt.Println("────────────────────")
+			}
 		case agk.ChunkTypeDelta:
 			fmt.Print(chunk.Delta)
-			totalChunks++
-			stepOutputs[currentStep]++
-
-		case agk.ChunkTypeStepComplete:
-			fmt.Printf("\n\nStep '%s' completed\n", chunk.StepName)
-
-		case agk.ChunkTypeDone:
-			fmt.Println("\n")
-			fmt.Println("================================")
-			fmt.Println("WORKFLOW COMPLETED")
-			fmt.Println("================================")
-			fmt.Printf("Total Chunks: %d\n", totalChunks)
-			fmt.Println("\nChunks per Step:")
-			for step, count := range stepOutputs {
-				fmt.Printf("  - %s: %d\n", step, count)
+		case agk.ChunkTypeAgentComplete:
+			if stepName, ok := chunk.Metadata["step_name"].(string); ok {
+				fmt.Printf("\n✅ Step '%s' completed\n", stepName)
 			}
+		case agk.ChunkTypeDone:
+			fmt.Println("\n\n=====================================")
+			fmt.Println("🎉 WORKFLOW COMPLETED")
+			fmt.Println("=====================================")
 		}
 	}
 
 	// Get final result
-	result := stream.Result()
-	if result.Error != nil {
-		log.Fatalf("Workflow failed: %v", result.Error)
+	result, err := stream.Wait()
+	if err != nil {
+		log.Fatalf("Workflow failed: %v", err)
 	}
 
-	fmt.Printf("\nFinal Output Length: %d characters\n", len(result.Output))
+	fmt.Printf("\n📊 Duration: %v | Success: %v\n", result.Duration, result.Success)
 }

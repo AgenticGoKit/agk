@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // tickMsg is sent periodically to check for file updates
@@ -662,19 +663,75 @@ func (m Model) renderTreeView() string {
 	}
 
 	// Run Details Header (Specific to this view)
-	// We keep this as "sub-header"
-	header := m.renderRunSummary() // Renamed from renderHeader to avoid confusion
+	header := m.renderRunSummary()
 	b.WriteString(header)
 	b.WriteString("\n")
 
-	// Span tree
+	// Split-pane layout using lipgloss.JoinHorizontal
+	leftWidth := (m.width - 10) * 55 / 100   // 55% for tree
+	rightWidth := (m.width - 10) - leftWidth // Rest for details
+
+	// Render left pane (tree)
 	treeContent := m.renderSpanTree()
-	b.WriteString(treeContent)
+	leftPane := LeftPaneStyle.Width(leftWidth).Render(treeContent)
+
+	// Render right pane (details)
+	var rightContent string
+	if m.cursor < len(m.visibleNodes) {
+		rightContent = m.renderQuickDetails(m.visibleNodes[m.cursor])
+	}
+	rightPane := RightPaneStyle.Width(rightWidth).Render(rightContent)
+
+	// Join panes horizontally
+	splitView := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	b.WriteString(splitView)
 
 	// Help bar
 	help := m.renderHelpBar()
 	b.WriteString("\n")
 	b.WriteString(help)
+
+	return b.String()
+}
+
+// renderQuickDetails renders a compact detail view for the right panel
+func (m Model) renderQuickDetails(node *SpanNode) string {
+	var b strings.Builder
+
+	// Header with friendly name and hint
+	b.WriteString(HeaderStyle.Render("📋 Details"))
+	b.WriteString(" " + MutedStyle.Render("[d] Full Details"))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 30))
+	b.WriteString("\n\n")
+
+	// Span name
+	b.WriteString(fmt.Sprintf("Name: %s\n", node.Span.GetFriendlyName()))
+	b.WriteString(fmt.Sprintf("Duration: %dms\n", node.DurationMs))
+	b.WriteString("\n")
+
+	// Key attributes
+	attrs := node.Span.GetImportantAttributes()
+	if len(attrs) > 0 {
+		b.WriteString(MutedStyle.Render("Attributes:"))
+		b.WriteString("\n")
+		for k, v := range attrs {
+			// Clean up key names for display
+			shortKey := strings.TrimPrefix(k, "agk.")
+			shortKey = strings.TrimPrefix(shortKey, "llm.")
+			shortKey = strings.TrimPrefix(shortKey, "workflow.")
+			b.WriteString(fmt.Sprintf("  %s: %v\n", shortKey, v))
+		}
+	}
+
+	// Status
+	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset {
+		if node.Span.Status.Code == "Ok" {
+			b.WriteString("\n" + SuccessStyle.Render("✓ Success"))
+		} else {
+			b.WriteString("\n" + ErrorStyle.Render("✗ Error: "+node.Span.Status.Description))
+		}
+	}
 
 	return b.String()
 }
@@ -781,28 +838,19 @@ func (m Model) renderSpanLine(node *SpanNode, selected bool) string {
 		prefix = "  "
 	}
 
-	// Span name with styling
+	// Use friendly name for cleaner display
+	friendlyName := node.Span.GetFriendlyName()
 	spanStyle := GetSpanStyle(node.Span.Name)
-	name := spanStyle.Render(node.Span.Name)
+	name := spanStyle.Render(friendlyName)
 
-	// Get additional context from attributes
+	// Get additional context from attributes (only if not already in friendly name)
 	var context string
 	attrs := node.Span.GetAllAttributes()
 
-	// For workflow steps, show the step name
-	if stepName, ok := attrs["agk.workflow.step_name"]; ok {
-		context = MutedStyle.Render(fmt.Sprintf(" [%v]", stepName))
-	}
-
-	// For LLM spans, show the model
-	if model, ok := attrs["agk.llm.model"]; ok {
-		context = MutedStyle.Render(fmt.Sprintf(" [%v]", model))
-	}
-
-	// For agent spans, show provider info
-	if provider, ok := attrs["agk.llm.provider"]; ok {
-		if context == "" {
-			context = MutedStyle.Render(fmt.Sprintf(" [%v]", provider))
+	// For workflow steps, show model info as context
+	if node.Span.IsWorkflowStep() {
+		if model, ok := attrs["agk.llm.model"]; ok {
+			context = MutedStyle.Render(fmt.Sprintf(" [%v]", model))
 		}
 	}
 

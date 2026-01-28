@@ -13,11 +13,13 @@ var templateFS embed.FS
 
 // TemplateData holds data for template rendering
 type TemplateData struct {
-	ProjectName string
-	LLMModel    string
-	LLMProvider string
-	Description string
-	AgentType   string
+	ProjectName  string
+	WorkflowName string
+	LLMModel     string
+	LLMProvider  string
+	Description  string
+	AgentType    string
+	APIKeyEnv    string
 }
 
 // RenderTemplate renders a template file with the provided data
