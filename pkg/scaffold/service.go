@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/agenticgokit/agk/internal/config"
-	"github.com/agenticgokit/agk/internal/templates"
 )
 
 // GenerateOptions contains options for project generation
@@ -29,7 +28,7 @@ type GenerateOptions struct {
 // Service handles project scaffolding and generation
 type Service struct {
 	logger          *zerolog.Logger
-	templateEngine  *templates.Engine
+	templateEngine  *Engine
 	configGenerator *config.Generator
 	generator       *Generator
 }
@@ -38,7 +37,7 @@ type Service struct {
 func NewService(logger *zerolog.Logger) *Service {
 	return &Service{
 		logger:          logger,
-		templateEngine:  templates.NewEngine(),
+		templateEngine:  NewEngine(),
 		configGenerator: config.NewGenerator(),
 		generator:       NewGenerator(),
 	}

@@ -112,6 +112,17 @@ var (
 			Bold(true)
 )
 
+// Pane styles for split layout
+var (
+	LeftPaneStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(mutedColor).
+			Padding(0, 1)
+
+	RightPaneStyle = lipgloss.NewStyle().
+			Padding(0, 1)
+)
+
 // GetSpanStyle returns the appropriate style based on span name
 func GetSpanStyle(spanName string) lipgloss.Style {
 	switch {

@@ -9,6 +9,11 @@ import (
 
 const (
 	DefaultGpt4Turbo = "gpt-4-turbo"
+
+	ProviderAnthropic = "anthropic"
+	ProviderOllama    = "ollama"
+	ProviderOpenAI    = "openai"
+	ProviderAzure     = "azure"
 )
 
 // GetTemplateGenerator returns the appropriate template generator for the given template type
@@ -149,9 +154,9 @@ func (g *SingleAgentGenerator) Generate(ctx context.Context, opts GenerateOption
 
 	// Determine LLM model based on provider
 	llmModel := DefaultGpt4Turbo
-	if opts.LLMProvider == "anthropic" {
+	if opts.LLMProvider == ProviderAnthropic {
 		llmModel = "claude-3-sonnet-20240229"
-	} else if opts.LLMProvider == "ollama" {
+	} else if opts.LLMProvider == ProviderOllama {
 		llmModel = "llama3.2"
 	}
 
@@ -280,6 +285,7 @@ func generateTemplateFiles(opts GenerateOptions, files map[string]string) error 
 		LLMProvider: opts.LLMProvider,
 		Description: opts.Description,
 		AgentType:   opts.AgentType,
+		APIKeyEnv:   getAPIKeyEnv(opts.LLMProvider),
 	}
 
 	for fileName, templatePath := range files {
@@ -335,13 +341,29 @@ func (g *WorkflowGenerator) Generate(ctx context.Context, opts GenerateOptions) 
 // Helper to get default model for provider
 func getLLMModel(provider string) string {
 	switch provider {
-	case "anthropic":
-		return "claude-3-sonnet-20240229"
-	case "ollama":
+	case ProviderAnthropic:
+		return "claude-sonnet-4-20250514"
+	case ProviderOllama:
 		return "llama3.2"
-	case "openai":
+	case ProviderOpenAI:
 		return "gpt-4-turbo"
 	default:
 		return "gpt-4-turbo"
+	}
+}
+
+// Helper to get the API key environment variable name for provider
+func getAPIKeyEnv(provider string) string {
+	switch provider {
+	case ProviderAnthropic:
+		return "ANTHROPIC_API_KEY"
+	case ProviderOllama:
+		return "OLLAMA_HOST" // Ollama doesn't need API key, but uses host
+	case ProviderOpenAI:
+		return "OPENAI_API_KEY"
+	case ProviderAzure:
+		return "AZURE_OPENAI_API_KEY"
+	default:
+		return "OPENAI_API_KEY"
 	}
 }

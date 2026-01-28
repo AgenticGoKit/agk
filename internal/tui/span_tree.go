@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -252,4 +253,67 @@ func (s *Span) GetSpanType() string {
 	default:
 		return "other"
 	}
+}
+
+// GetFriendlyName returns a user-friendly display name for the span
+func (s *Span) GetFriendlyName() string {
+	attrs := s.GetAllAttributes()
+	name := strings.ToLower(s.Name)
+
+	// For workflow steps, use the step name as primary label
+	if strings.Contains(name, "workflow.step") {
+		if stepName, ok := attrs["agk.workflow.step_name"]; ok {
+			return fmt.Sprintf("🔹 %v", stepName)
+		}
+	}
+
+	// For workflow root spans, show workflow mode
+	if strings.Contains(name, "agk.workflow.sequential") {
+		return "📋 Sequential Workflow"
+	}
+	if strings.Contains(name, "agk.workflow.parallel") {
+		return "⚡ Parallel Workflow"
+	}
+	if strings.Contains(name, "agk.workflow.dag") {
+		return "🔀 DAG Workflow"
+	}
+	if strings.Contains(name, "agk.workflow.loop") {
+		return "🔄 Loop Workflow"
+	}
+
+	// For LLM spans, show provider and model
+	if strings.Contains(name, "llm") {
+		if model, ok := attrs["agk.llm.model"]; ok {
+			provider := "llm"
+			if p, ok := attrs["agk.llm.provider"]; ok {
+				provider = fmt.Sprintf("%v", p)
+			}
+			return fmt.Sprintf("🤖 %s [%v]", provider, model)
+		}
+	}
+
+	// For agent spans, simplify
+	if strings.Contains(name, "agk.agent.run") {
+		if model, ok := attrs["agk.llm.model"]; ok {
+			return fmt.Sprintf("🤖 Agent [%v]", model)
+		}
+		return "🤖 Agent"
+	}
+
+	// Default: return original name
+	return s.Name
+}
+
+// IsWorkflowStep returns true if this span represents a workflow step
+func (s *Span) IsWorkflowStep() bool {
+	return strings.Contains(strings.ToLower(s.Name), "workflow.step")
+}
+
+// IsInternalSpan returns true if this span should be hidden by default (detail level)
+func (s *Span) IsInternalSpan() bool {
+	name := strings.ToLower(s.Name)
+	// These are internal implementation details, show only when parent expanded
+	return strings.Contains(name, "agk.agent.run.stream") ||
+		strings.Contains(name, "agk.agent.run.execute") ||
+		strings.Contains(name, "transform")
 }

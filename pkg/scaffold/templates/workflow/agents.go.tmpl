@@ -1,0 +1,24 @@
+package workflow
+
+import (
+	"github.com/agenticgokit/agenticgokit/v1beta/core"
+)
+
+// CreateAgents initializes all agents for the workflow
+func CreateAgents(llmProvider, model string) (map[string]core.Agent, error) {
+	agents := make(map[string]core.Agent)
+
+	// TODO: Create agents based on your workflow requirements
+	// Example:
+	// mainAgent, err := core.NewAgent(core.AgentConfig{
+	//     Name:        "main-agent",
+	//     LLMProvider: llmProvider,
+	//     Model:       model,
+	// })
+	// if err != nil {
+	//     return nil, err
+	// }
+	// agents["main"] = mainAgent
+
+	return agents, nil
+}
