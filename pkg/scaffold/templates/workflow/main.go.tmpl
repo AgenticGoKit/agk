@@ -1,0 +1,131 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	agk "github.com/agenticgokit/agenticgokit/v1beta"
+)
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	// Get service version from environment or use default
+	serviceVersion := os.Getenv("SERVICE_VERSION")
+	if serviceVersion == "" {
+		serviceVersion = "0.1.0"
+	}
+
+	// Create a streaming workflow with multiple steps
+	// Each step is an agent that processes and transforms the input
+	// Steps run sequentially, with each step's output feeding into the next
+
+	fmt.Println("Creating Streaming Workflow...")
+	fmt.Println("================================")
+
+	// Create workflow using the builder pattern
+	workflow, err := agk.NewWorkflow("{{.ProjectName}}").
+		WithObservability("{{.ProjectName}}", serviceVersion).
+		// Step 1: Research - gather information
+		AddStep("research", agk.NewBuilder("researcher").
+
+			WithConfig(&agk.Config{
+				SystemPrompt: "You are a research assistant. When given a topic, provide detailed, factual information about it. Include key concepts, important details, and relevant context.",
+				LLM: agk.LLMConfig{
+					Provider:    "{{.LLMProvider}}",
+					Model:       "{{.LLMModel}}",
+					Temperature: 0.7,
+					MaxTokens:   2000,
+				},
+			}).MustBuild()).
+		// Step 2: Summarize - condense the research
+		AddStep("summarize", agk.NewBuilder("summarizer").
+
+			WithConfig(&agk.Config{
+				SystemPrompt: "You are a summarization expert. Take the provided content and create a clear, concise summary that captures the key points. Use bullet points for clarity.",
+				LLM: agk.LLMConfig{
+					Provider:    "{{.LLMProvider}}",
+					Model:       "{{.LLMModel}}",
+					Temperature: 0.5,
+					MaxTokens:   1000,
+				},
+			}).MustBuild()).
+		// Step 3: Format - create final output
+		AddStep("format", agk.NewBuilder("formatter").
+
+			WithConfig(&agk.Config{
+				SystemPrompt: "You are a content formatter. Take the provided summary and format it as a professional report with sections, headers, and clear structure.",
+				LLM: agk.LLMConfig{
+					Provider:    "{{.LLMProvider}}",
+					Model:       "{{.LLMModel}}",
+					Temperature: 0.3,
+					MaxTokens:   1500,
+				},
+			}).MustBuild()).
+		Build()
+
+	if err != nil {
+		log.Fatalf("Failed to create workflow: %v", err)
+	}
+	defer workflow.Cleanup(ctx)
+
+	// Run the workflow with streaming
+	topic := "artificial intelligence in healthcare"
+	fmt.Printf("\nTopic: %s\n\n", topic)
+
+	// Stream the workflow execution
+	stream, err := workflow.RunStream(ctx, topic)
+	if err != nil {
+		log.Fatalf("Failed to start workflow: %v", err)
+	}
+
+	// Track progress through steps
+	currentStep := ""
+	totalChunks := 0
+	stepOutputs := make(map[string]int)
+
+	for chunk := range stream.Chunks() {
+		if chunk.Error != nil {
+			fmt.Printf("\nError: %v\n", chunk.Error)
+			break
+		}
+
+		switch chunk.Type {
+		case agk.ChunkTypeStepStart:
+			currentStep = chunk.StepName
+			fmt.Printf("\n[Step: %s]\n", currentStep)
+			fmt.Println(string(make([]byte, 40)))
+
+		case agk.ChunkTypeDelta:
+			fmt.Print(chunk.Delta)
+			totalChunks++
+			stepOutputs[currentStep]++
+
+		case agk.ChunkTypeStepComplete:
+			fmt.Printf("\n\nStep '%s' completed\n", chunk.StepName)
+
+		case agk.ChunkTypeDone:
+			fmt.Println("\n")
+			fmt.Println("================================")
+			fmt.Println("WORKFLOW COMPLETED")
+			fmt.Println("================================")
+			fmt.Printf("Total Chunks: %d\n", totalChunks)
+			fmt.Println("\nChunks per Step:")
+			for step, count := range stepOutputs {
+				fmt.Printf("  - %s: %d\n", step, count)
+			}
+		}
+	}
+
+	// Get final result
+	result := stream.Result()
+	if result.Error != nil {
+		log.Fatalf("Workflow failed: %v", result.Error)
+	}
+
+	fmt.Printf("\nFinal Output Length: %d characters\n", len(result.Output))
+}

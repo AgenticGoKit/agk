@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agenticgokit/agk/internal/audit"
 	"github.com/agenticgokit/agk/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -94,12 +95,57 @@ var exportCmd = &cobra.Command{
 	},
 }
 
+// auditCmd analyzes trace for reasoning patterns
+var auditCmd = &cobra.Command{
+	Use:   "audit [run-id]",
+	Short: "Analyze trace for reasoning patterns",
+	Long: `Analyze a trace to extract reasoning events for evaluation.
+
+Outputs a TraceObject with events categorized as:
+  - thought: Internal reasoning/decisions
+  - tool_call: Tool invocations with arguments
+  - observation: Tool outputs/results
+  - llm_call: LLM API calls
+
+Use AGK_TRACE_LEVEL=detailed when running your agent to capture
+full content (prompts, responses, tool args/outputs).`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID := ""
+		if len(args) > 0 {
+			runID = args[0]
+		}
+		return auditTrace(runID)
+	},
+}
+
+// mermaidCmd generates Mermaid diagram from trace
+var mermaidCmd = &cobra.Command{
+	Use:   "mermaid [run-id]",
+	Short: "Generate Mermaid diagram from trace",
+	Long: `Generate a Mermaid flowchart visualizing the agent's execution path.
+
+The diagram shows the sequence of thoughts, tool calls, and decisions
+made by the agent. Output is Markdown with embedded Mermaid code.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID := ""
+		if len(args) > 0 {
+			runID = args[0]
+		}
+		output, _ := cmd.Flags().GetString("output")
+		return generateMermaid(runID, output)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(traceCmd)
 	traceCmd.AddCommand(listCmd)
 	traceCmd.AddCommand(showCmd)
 	traceCmd.AddCommand(viewCmd)
 	traceCmd.AddCommand(exportCmd)
+	traceCmd.AddCommand(auditCmd)
+	traceCmd.AddCommand(mermaidCmd)
 
 	// Export flags
 	exportCmd.Flags().String("format", "json", "Export format: json, jaeger, otel")
@@ -268,7 +314,7 @@ func showTrace(runID string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -305,8 +351,8 @@ func showTrace(runID string) error {
 		EstimatedCost: manifest.EstimatedCost,
 	}
 
-	// Create and run TUI
-	model := tui.NewTraceViewer(runID, tuiManifest, spans)
+	// Create and run TUI with hot reload support
+	model := tui.NewTraceViewerWithPath(runID, tuiManifest, spans, tracePath)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("failed to run TUI: %w", err)
@@ -320,7 +366,7 @@ func viewRun(runID string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -372,7 +418,7 @@ func exportTraceInternal(runID, format, output string) error {
 
 	// If no run ID provided, use latest
 	if runID == "" {
-		runID = getLatestRunID(runsDir)
+		runID = getLatestRunID()
 		if runID == "" {
 			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
 			return nil
@@ -695,8 +741,8 @@ func toInt64(v interface{}) (int64, error) {
 	}
 }
 
-func getLatestRunID(runsDir string) string {
-	entries, err := os.ReadDir(runsDir)
+func getLatestRunID() string {
+	entries, err := os.ReadDir(runsDirName)
 	if err != nil {
 		return ""
 	}
@@ -731,4 +777,100 @@ type Span struct {
 	Status               map[string]interface{}   `json:"Status"`
 	ChildSpanCount       int                      `json:"ChildSpanCount"`
 	InstrumentationScope map[string]interface{}   `json:"InstrumentationScope"`
+}
+
+// auditTrace analyzes a trace and outputs a TraceObject for evaluation
+func auditTrace(runID string) error {
+	runsDir := runsDirName
+
+	// If no run ID provided, use latest
+	if runID == "" {
+		runID = getLatestRunID()
+		if runID == "" {
+			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+			return nil
+		}
+	}
+
+	runPath := filepath.Join(runsDir, runID)
+
+	// Check if run exists
+	if _, err := os.Stat(runPath); os.IsNotExist(err) {
+		return fmt.Errorf("trace not found: %s", runID)
+	}
+
+	// Use the audit package to collect events
+	collector, err := audit.NewCollector(runPath)
+	if err != nil {
+		return fmt.Errorf("failed to create collector: %w", err)
+	}
+
+	traceObj, err := collector.Collect()
+	if err != nil {
+		return fmt.Errorf("failed to collect trace: %w", err)
+	}
+
+	// Output as JSON
+	output, err := json.MarshalIndent(traceObj, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal trace object: %w", err)
+	}
+
+	fmt.Println(string(output))
+	return nil
+}
+
+// generateMermaid creates a Mermaid flowchart from trace data
+func generateMermaid(runID, output string) error {
+	runsDir := runsDirName
+
+	// If no run ID provided, use latest
+	if runID == "" {
+		runID = getLatestRunID()
+		if runID == "" {
+			fmt.Println("No traces found. Run with AGK_TRACE=true to generate traces.")
+			return nil
+		}
+	}
+
+	runPath := filepath.Join(runsDir, runID)
+
+	// Check if run exists
+	if _, err := os.Stat(runPath); os.IsNotExist(err) {
+		return fmt.Errorf("trace not found: %s", runID)
+	}
+
+	// Use the audit package to collect events
+	collector, err := audit.NewCollector(runPath)
+	if err != nil {
+		return fmt.Errorf("failed to create collector: %w", err)
+	}
+
+	traceObj, err := collector.Collect()
+	if err != nil {
+		return fmt.Errorf("failed to collect trace: %w", err)
+	}
+
+	// Generate Mermaid diagram
+	mermaid := audit.GenerateMermaidWithHierarchy(traceObj)
+
+	// Build output content
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("# Agent Trace: %s\n\n", runID))
+	content.WriteString(fmt.Sprintf("**Events:** %d | **Duration:** %dms\n\n",
+		traceObj.Summary.TotalEvents, traceObj.Summary.TotalDurationMs))
+	content.WriteString("## Execution Flow\n\n")
+	content.WriteString(mermaid)
+
+	// Write to file or stdout
+	if output != "" {
+		if err := os.WriteFile(output, []byte(content.String()), 0600); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+		fmt.Printf("✅ Generated Mermaid diagram: %s\n", output)
+	} else {
+		fmt.Println(content.String())
+	}
+
+	return nil
 }
