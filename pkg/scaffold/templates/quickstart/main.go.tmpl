@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agk "github.com/agenticgokit/agenticgokit/v1beta"
+	_ "github.com/agenticgokit/agenticgokit/plugins/llm/{{if .LLMProvider}}{{.LLMProvider}}{{else}}openai{{end}}"
 )
 
 func main() {
@@ -33,7 +34,7 @@ func main() {
 	defer agent.Cleanup(ctx)
 
 	// Simple conversation
-	userMessage := "What is AgenticGoKit?"
+	userMessage := "Write a haiku about coding."
 
 	fmt.Printf("User: %s\n\n", userMessage)
 	fmt.Println("Assistant:")

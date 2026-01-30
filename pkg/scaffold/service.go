@@ -48,18 +48,12 @@ func (s *Service) GenerateProject(ctx context.Context, opts GenerateOptions) err
 	switch opts.Template {
 	case "quickstart":
 		templateType = TemplateQuickstart
-	case "single-agent":
-		templateType = TemplateSingleAgent
-	case "multi-agent":
-		templateType = TemplateMultiAgent
-	case "mcp-tools":
-		templateType = TemplateMCPTools
 	case "workflow":
 		templateType = TemplateWorkflow
 	default:
-		// Default to single-agent if not specified or unknown
+		// Default to quickstart if not specified or unknown
 		if opts.Template == "" {
-			templateType = TemplateSingleAgent
+			templateType = TemplateQuickstart
 		} else {
 			// Try to match string to type, otherwise error
 			templateType = TemplateType(opts.Template)
