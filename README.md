@@ -1,8 +1,8 @@
 # AGK - AgenticGoKit CLI
 
-> **Build production-ready agentic AI systems in seconds.**
+> **The Unified Toolchain for Agentic AI Systems**
 
-AGK is the official CLI for **AgenticGoKit**, designed to accelerate your development workflow. From scaffolding simple agents to deploying enterprise-grade multi-agent swarms, AGK handles the boilerplate so you can focus on intelligence.
+AGK is the official CLI for **AgenticGoKit**, designed to manage the entire lifecycle of intelligent agents. From scaffolding new projects to distributing templates and observing production workflows, AGK provides a standardized interface for building the next generation of AI software.
 
 ![Version](https://img.shields.io/badge/version-0.1.0-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
@@ -10,31 +10,32 @@ AGK is the official CLI for **AgenticGoKit**, designed to accelerate your develo
 
 ---
 
-## 🚀 Why AGK?
+## Vision: The Complete Lifecycle
 
-- **⚡ Instant Scaffolding**: Generate complete, compilable projects with one command.
-- **🧠 Smart Defaults**: Auto-detects configuration for OpenAI, Anthropic, and Ollama.
-- **� Trace Auditor**: Built-in observability to debug agent thoughts and prompts.
-- **📦 Production Ready**: Docker support, idiomatic Go code, and established patterns.
-- **🌊 Streaming Native**: All templates support real-time token streaming out of the box.
+AGK aims to streamline the developer experience across four key pillars:
+
+1.  **Create**: Scaffold powerful agents instantly using a rich registry of templates.
+2.  **Distribute**: (Planned) Share your agent architectures and workflows with the community or your team.
+3.  **Deploy**: (Planned) Seamlessly ship agents to cloud platforms, Kubernetes, or edge devices.
+4.  **Trace**: Gain deep observability into your agent's reasoning, prompts, and performance.
 
 ---
 
-## 🏁 Quick Start
+## Quick Start
 
 ### 1. Installation
 
 ```bash
 # Build from source
-cd agk-new
+cd agk
 go build -o agk main.go
 ```
 
 ### 2. Create Your First Agent
 
 ```bash
-# Initialize a new project with the single-agent template
-./agk init my-agent --template single-agent --llm openai
+# Initialize a new project with the quickstart template
+./agk init my-agent --template quickstart --llm openai
 
 # Navigate to the project
 cd my-agent
@@ -55,21 +56,43 @@ go run main.go
 
 ---
 
-## 📦 Templates
+## Templates & Registry
 
-Choose the right foundation for your project:
+AGK features a powerful template system that lets you use both built-in and community-created templates. Explore the [Official Template Registry](https://github.com/agk-templates).
 
-| Template | Complexity | Best For | Description |
-|----------|------------|----------|-------------|
-| **Quickstart** | ⭐ | Learning | Minimal setup. Single file. Hardcoded config. Perfect for understanding the basics. |
-| **Single-Agent** | ⭐⭐ | Prototypes | Adds tools, memory, and environment config. The "standard" starting point. |
-| **Multi-Agent** | ⭐⭐⭐ | Workflows | Sequential pipeline of specialized agents (e.g., Researcher → Writer). |
-| **Config-Driven** | ⭐⭐⭐⭐ | Enterprise | Factory patterns, TOML config, shared memory. Built for scale. |
-| **Advanced** | ⭐⭐⭐⭐⭐ | Production | Full-stack: REST API, WebSocket, Docker, Frontend integration. |
+### Use a Template
+```bash
+./agk init enterprise-bot --template workflow --llm anthropic
+```
+
+### Manage Templates
+Bring in templates from GitHub, local folders, or other sources.
+
+```bash
+# List all available templates (built-in + cached)
+agk template list
+
+# Add a template from a remote source
+agk template add github.com/username/my-template
+
+# Remove a cached template
+agk template remove my-template
+```
+
+> **Want to build your own?** Check out the [Creating Templates Guide](docs/creating-templates.md).
+
+### Built-in Templates
+
+| Template | Best For | Description |
+|----------|----------|-------------|
+| **Quickstart** | Learning | Minimal setup. Single file. Hardcoded config. Perfect for understanding the basics. |
+| **Workflow** | Pipelines | Multi-step workflow (e.g. Sequential, Parallel) structure. |
+
+Run `agk init --list` to see all available templates including those from the registry.
 
 **Example usage:**
 ```bash
-./agk init enterprise-bot --template config-driven --llm anthropic
+./agk init enterprise-bot --template workflow --llm anthropic
 ```
 
 ---
@@ -131,23 +154,25 @@ agk trace mermaid > trace_flow.md
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
-### ✅ Completed
-- Template system (Quickstart, Single-Agent)
-- Smart LLM Provider detection
-- Streaming support
-- **Trace Auditor** (Audit & Mermaid commands)
-- **Interactive Trace Viewer** (with content inspection)
+### Completed
+- **Template Registry System** (`list`, `add`, `remove`)
+- **Smart Scaffolding** (Quickstart, Workflow bases)
+- **Trace Auditor** (Interactive TUI & Mermaid export)
+- **Streaming Support** (Native across all templates)
 
-### 🚧 In Progress
-- Multi-Agent & Enterprise templates
-- Advanced full-stack template
+### In Progress
+- **Multi-Agent Templates**
+- **Advanced Full-Stack Templates**
 
-### 📅 Planned
-- Interactive init wizard (`agk init -i`)
-- MCP Server management
-- Project upgrade tools
+### Planned
+- **Template Distribution** (`pack`, `push`)
+- **Cloud Deployment Engine** (`agk deploy`)
+- **Workflow Visualization** (Interactive graph editor)
+- **Interactive Init Wizard** (`agk init -i`)
+- **MCP Server Management**
+- **RAG & Knowledge Base Management**
 
 ---
 

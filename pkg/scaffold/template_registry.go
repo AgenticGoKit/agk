@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultGpt4Turbo = "gpt-4-turbo"
+	DefaultOpenAIModel = "gpt-4o"
 
 	ProviderAnthropic = "anthropic"
 	ProviderOllama    = "ollama"
@@ -22,26 +22,13 @@ func GetTemplateGenerator(templateType TemplateType) (TemplateGenerator, error) 
 	case TemplateQuickstart:
 		return NewQuickstartGenerator(), nil
 
-	case TemplateSingleAgent:
-		return NewSingleAgentGenerator(), nil
-
-	case TemplateMultiAgent:
-		return NewMultiAgentGenerator(), nil
-
-	case TemplateConfigDriven:
-		return NewConfigDrivenGenerator(), nil
-
-	case TemplateAdvanced:
-		return NewAdvancedGenerator(), nil
-
-	case TemplateMCPTools:
-		return NewMCPToolsGenerator(), nil
-
 	case TemplateWorkflow:
 		return NewWorkflowGenerator(), nil
 
 	default:
-		return nil, fmt.Errorf("unknown template type: %s", templateType)
+		// Attempt to fallback to registry/external generator if not built-in?
+		// But GetTemplateGenerator is for built-ins usually.
+		return nil, fmt.Errorf("unknown built-in template type: %s", templateType)
 	}
 }
 
@@ -96,7 +83,7 @@ func (g *QuickstartGenerator) Generate(ctx context.Context, opts GenerateOptions
 	// Prepare template data
 	data := TemplateData{
 		ProjectName: opts.ProjectName,
-		LLMModel:    "gpt-4o-mini", // Default for quickstart
+		LLMModel:    getLLMModel(opts.LLMProvider), // Dynamic model selection
 		LLMProvider: opts.LLMProvider,
 		Description: opts.Description,
 		AgentType:   opts.AgentType,
@@ -129,149 +116,30 @@ func (g *QuickstartGenerator) Generate(ctx context.Context, opts GenerateOptions
 
 // ===== GENERATORS =====
 
-// SingleAgentGenerator generates a single-agent template
-type SingleAgentGenerator struct{}
+// WorkflowGenerator generates a streaming workflow template
+type WorkflowGenerator struct{}
 
-func NewSingleAgentGenerator() *SingleAgentGenerator {
-	return &SingleAgentGenerator{}
+func NewWorkflowGenerator() *WorkflowGenerator {
+	return &WorkflowGenerator{}
 }
 
-func (g *SingleAgentGenerator) GetMetadata() TemplateMetadata {
+func (g *WorkflowGenerator) GetMetadata() TemplateMetadata {
 	return TemplateMetadata{
-		Name:        "Single-Agent",
-		Description: "Single agent with tools and memory",
-		Complexity:  "⭐⭐",
-		FileCount:   5,
-		Features:    []string{"Agent", "Tools/MCP", "Memory", ".env Config"},
-	}
-}
-
-func (g *SingleAgentGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// Create project directory
-	if err := os.MkdirAll(opts.ProjectPath, 0750); err != nil {
-		return fmt.Errorf("failed to create project directory: %w", err)
-	}
-
-	// Determine LLM model based on provider
-	llmModel := DefaultGpt4Turbo
-	if opts.LLMProvider == ProviderAnthropic {
-		llmModel = "claude-3-sonnet-20240229"
-	} else if opts.LLMProvider == ProviderOllama {
-		llmModel = "llama3.2"
-	}
-
-	// Prepare template data
-	data := TemplateData{
-		ProjectName: opts.ProjectName,
-		LLMModel:    llmModel,
-		LLMProvider: opts.LLMProvider,
-		Description: opts.Description,
-		AgentType:   opts.AgentType,
-	}
-
-	// Files to generate: go.mod, main.go, .env
-	files := map[string]string{
-		"go.mod":  "templates/single-agent/go.mod.tmpl",
-		"main.go": "templates/single-agent/main.go.tmpl",
-		".env":    "templates/single-agent/.env.tmpl",
-	}
-
-	for fileName, templatePath := range files {
-		content, err := RenderTemplate(templatePath, data)
-		if err != nil {
-			return err
-		}
-
-		filePath := filepath.Join(opts.ProjectPath, fileName)
-		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
-			return fmt.Errorf("failed to create %s: %w", fileName, err)
-		}
-	}
-
-	return nil
-}
-
-// MultiAgentGenerator generates a multi-agent template
-type MultiAgentGenerator struct{}
-
-func NewMultiAgentGenerator() *MultiAgentGenerator {
-	return &MultiAgentGenerator{}
-}
-
-func (g *MultiAgentGenerator) GetMetadata() TemplateMetadata {
-	return TemplateMetadata{
-		Name:        "Multi-Agent",
-		Description: "Multiple agents with workflow pipeline",
+		Name:        "Workflow",
+		Description: "Multi-step streaming workflow pipeline",
 		Complexity:  "⭐⭐⭐",
-		FileCount:   8,
-		Features:    []string{"Agents", "Workflow", "Sequential Pipeline", ".env Config"},
-	}
-}
-
-func (g *MultiAgentGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// TODO: Phase 2 - Implement multi-agent generator
-	return fmt.Errorf("multi-agent template not yet implemented")
-}
-
-// ConfigDrivenGenerator generates a config-driven template
-type ConfigDrivenGenerator struct{}
-
-func NewConfigDrivenGenerator() *ConfigDrivenGenerator {
-	return &ConfigDrivenGenerator{}
-}
-
-func (g *ConfigDrivenGenerator) GetMetadata() TemplateMetadata {
-	return TemplateMetadata{
-		Name:        "Config-Driven",
-		Description: "Enterprise setup with TOML configuration",
-		Complexity:  "⭐⭐⭐⭐",
-		FileCount:   12,
-		Features:    []string{"Agents", "Workflow", "Factory Pattern", "TOML Config", "Memory"},
-	}
-}
-
-func (g *ConfigDrivenGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// TODO: Phase 2 - Implement config-driven generator
-	return fmt.Errorf("config-driven template not yet implemented")
-}
-
-// AdvancedGenerator generates an advanced template
-type AdvancedGenerator struct{}
-
-func NewAdvancedGenerator() *AdvancedGenerator {
-	return &AdvancedGenerator{}
-}
-
-func (g *AdvancedGenerator) GetMetadata() TemplateMetadata {
-	return TemplateMetadata{
-		Name:        "Advanced",
-		Description: "Full-stack with server, frontend, and Docker",
-		Complexity:  "⭐⭐⭐⭐⭐",
-		FileCount:   20,
-		Features:    []string{"Agents", "Workflow", "Server", "Frontend", "WebSocket", "Docker", "TOML Config"},
-	}
-}
-
-func (g *AdvancedGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	// TODO: Phase 2 - Implement advanced generator
-	return fmt.Errorf("advanced template not yet implemented")
-}
-
-// MCPToolsGenerator generates an MCP-enabled agent template
-type MCPToolsGenerator struct{}
-
-func NewMCPToolsGenerator() *MCPToolsGenerator {
-	return &MCPToolsGenerator{}
-}
-
-func (g *MCPToolsGenerator) GetMetadata() TemplateMetadata {
-	return TemplateMetadata{
-		Name:        "MCP-Tools",
-		Description: "Agent with MCP server tool integration",
-		Complexity:  "⭐⭐",
 		FileCount:   3,
-		Features:    []string{"Agent", "MCP Tools", "Streaming", "Observability"},
+		Features:    []string{"Workflow", "Multi-Agent", "Streaming", "Step Tracking"},
 	}
+}
+
+func (g *WorkflowGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
+	files := map[string]string{
+		"go.mod":    "templates/workflow/go.mod.tmpl",
+		"main.go":   "templates/workflow/main.go.tmpl",
+		"README.md": "templates/workflow/README.md.tmpl",
+	}
+	return generateTemplateFiles(opts, files)
 }
 
 func generateTemplateFiles(opts GenerateOptions, files map[string]string) error {
@@ -303,41 +171,6 @@ func generateTemplateFiles(opts GenerateOptions, files map[string]string) error 
 	return nil
 }
 
-func (g *MCPToolsGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	files := map[string]string{
-		"go.mod":    "templates/mcp-tools/go.mod.tmpl",
-		"main.go":   "templates/mcp-tools/main.go.tmpl",
-		"README.md": "templates/mcp-tools/README.md.tmpl",
-	}
-	return generateTemplateFiles(opts, files)
-}
-
-// WorkflowGenerator generates a streaming workflow template
-type WorkflowGenerator struct{}
-
-func NewWorkflowGenerator() *WorkflowGenerator {
-	return &WorkflowGenerator{}
-}
-
-func (g *WorkflowGenerator) GetMetadata() TemplateMetadata {
-	return TemplateMetadata{
-		Name:        "Workflow",
-		Description: "Multi-step streaming workflow pipeline",
-		Complexity:  "⭐⭐⭐",
-		FileCount:   3,
-		Features:    []string{"Workflow", "Multi-Agent", "Streaming", "Step Tracking"},
-	}
-}
-
-func (g *WorkflowGenerator) Generate(ctx context.Context, opts GenerateOptions) error {
-	files := map[string]string{
-		"go.mod":    "templates/workflow/go.mod.tmpl",
-		"main.go":   "templates/workflow/main.go.tmpl",
-		"README.md": "templates/workflow/README.md.tmpl",
-	}
-	return generateTemplateFiles(opts, files)
-}
-
 // Helper to get default model for provider
 func getLLMModel(provider string) string {
 	switch provider {
@@ -346,9 +179,9 @@ func getLLMModel(provider string) string {
 	case ProviderOllama:
 		return "llama3.2"
 	case ProviderOpenAI:
-		return "gpt-4-turbo"
+		return "gpt-4o"
 	default:
-		return "gpt-4-turbo"
+		return "gpt-4o"
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	agk "github.com/agenticgokit/agenticgokit/v1beta"
-	_ "github.com/agenticgokit/agenticgokit/plugins/llm/{{.LLMProvider}}"
+	_ "github.com/agenticgokit/agenticgokit/plugins/llm/{{if .LLMProvider}}{{.LLMProvider}}{{else}}openai{{end}}"
 )
 
 func main() {
@@ -28,67 +28,45 @@ func main() {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
 
-	// Create agents for each step
-	// Note: Observability/tracing is handled by the workflow - no need to add WithObservability to agents
-	researcherConfig := &agk.Config{
-		Name:         "researcher",
-		SystemPrompt: "You are a research assistant. When given a topic, provide detailed, factual information about it. Include key concepts, important details, and relevant context.",
-		Timeout:      60 * time.Second,
-		LLM: agk.LLMConfig{
-			Provider:    "{{.LLMProvider}}",
-			Model:       "{{.LLMModel}}",
-			Temperature: 0.7,
-			MaxTokens:   2000,
-			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
-		},
+	// Shared base configuration
+	baseLLM := agk.LLMConfig{
+		Provider:  "{{.LLMProvider}}",
+		Model:     "{{.LLMModel}}",
+		APIKey:    os.Getenv("{{.APIKeyEnv}}"),
+		MaxTokens: 2000,
 	}
 
-	researcher, err := agk.NewBuilder("researcher").
-		WithConfig(researcherConfig).
-		Build()
-	if err != nil {
-		log.Fatalf("Failed to create researcher agent: %v", err)
+	// Helper to create agents cleanly
+	createAgent := func(name, prompt string, temp float64) agk.Agent {
+		cfg := baseLLM
+		cfg.Temperature = float32(temp) // Convert float64 to float32
+
+		// Create agent with specific config
+		agent, err := agk.NewBuilder(name).
+			WithConfig(&agk.Config{
+				Name:         name,
+				SystemPrompt: prompt,
+				Timeout:      60 * time.Second,
+				LLM:          cfg,
+			}).Build()
+		if err != nil {
+			log.Fatalf("Failed to create %s: %v", name, err)
+		}
+		return agent
 	}
 
-	summarizerConfig := &agk.Config{
-		Name:         "summarizer",
-		SystemPrompt: "You are a summarization expert. Take the provided content and create a clear, concise summary that captures the key points. Use bullet points for clarity.",
-		Timeout:      60 * time.Second,
-		LLM: agk.LLMConfig{
-			Provider:    "{{.LLMProvider}}",
-			Model:       "{{.LLMModel}}",
-			Temperature: 0.5,
-			MaxTokens:   1000,
-			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
-		},
-	}
+	// Create agents
+	researcher := createAgent("researcher",
+		"You are a research assistant. When given a topic, provide detailed, factual information about it. Include key concepts, important details, and relevant context.",
+		0.7)
 
-	summarizer, err := agk.NewBuilder("summarizer").
-		WithConfig(summarizerConfig).
-		Build()
-	if err != nil {
-		log.Fatalf("Failed to create summarizer agent: %v", err)
-	}
+	summarizer := createAgent("summarizer",
+		"You are a summarization expert. Take the provided content and create a clear, concise summary that captures the key points. Use bullet points for clarity.",
+		0.5)
 
-	formatterConfig := &agk.Config{
-		Name:         "formatter",
-		SystemPrompt: "You are a content formatter. Take the provided summary and format it as a professional report with sections, headers, and clear structure.",
-		Timeout:      60 * time.Second,
-		LLM: agk.LLMConfig{
-			Provider:    "{{.LLMProvider}}",
-			Model:       "{{.LLMModel}}",
-			Temperature: 0.3,
-			MaxTokens:   1500,
-			APIKey:      os.Getenv("{{.APIKeyEnv}}"),
-		},
-	}
-
-	formatter, err := agk.NewBuilder("formatter").
-		WithConfig(formatterConfig).
-		Build()
-	if err != nil {
-		log.Fatalf("Failed to create formatter agent: %v", err)
-	}
+	formatter := createAgent("formatter",
+		"You are a content formatter. Take the provided summary and format it as a professional report with sections, headers, and clear structure.",
+		0.3)
 
 	// Add steps to the workflow
 	// Step 1: Research - gather information

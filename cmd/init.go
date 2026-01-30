@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/agenticgokit/agk/pkg/registry"
 	"github.com/agenticgokit/agk/pkg/scaffold"
 )
 
@@ -46,11 +47,20 @@ Examples:
   # Initialize project interactively
   agk init my-project
 
-  # Initialize with specific template
-  agk init my-project --template simple-agent
+  # Initialize with built-in template
+  agk init my-project --template single-agent
+
+  # Initialize from a community template (registry)
+  agk init my-project --template rag-agent
+
+  # Initialize from a GitHub repository
+  agk init my-project --template github.com/username/my-template
+
+  # Initialize from a specific version
+  agk init my-project --template github.com/username/my-template@v1.0.0
 
   # Non-interactive initialization
-  agk init my-project --template simple-agent --llm openai --agent-type single --force
+  agk init my-project --template single-agent --llm openai --agent-type single --force
 
   # Initialize in specific directory
   agk init my-project --output ./projects
@@ -109,23 +119,57 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate and get template type
-	templateType, err := scaffold.ValidateTemplate(initTemplate)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "invalid template")
-		color.Red("✗ %v", err)
-		return err
-	}
-	span.SetAttributes(attribute.String("template_type", string(templateType)))
+	// Try to get generator (built-in or external)
+	var generator scaffold.TemplateGenerator
+	var metadata scaffold.TemplateMetadata
+	var templateType scaffold.TemplateType
 
-	// Get template generator
-	generator, err := scaffold.GetTemplateGenerator(templateType)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get generator")
-		color.Red("✗ Failed to get template generator: %v", err)
-		return err
+	// First, check if it's a built-in template
+	builtInType, err := scaffold.ValidateTemplate(initTemplate)
+	if err == nil {
+		// It is built-in
+		templateType = builtInType
+		span.SetAttributes(attribute.String("template_type", string(templateType)))
+
+		gen, err := scaffold.GetTemplateGenerator(templateType)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to get generator")
+			color.Red("✗ Failed to get template generator: %v", err)
+			return err
+		}
+		generator = gen
+		metadata = gen.GetMetadata()
+	} else {
+		// Not built-in, try resolving as external template
+		color.Cyan("ℹ️  Template '%s' not found locally, checking registry...", initTemplate)
+
+		cm, err := registry.NewCacheManager("")
+		if err != nil {
+			return fmt.Errorf("failed to init cache manager: %w", err)
+		}
+		resolver := registry.NewResolver(cm)
+
+		cached, err := resolver.Resolve(ctx, initTemplate)
+		if err != nil {
+			// Failed both built-in and external
+			err = fmt.Errorf("template '%s' not found (neither built-in nor registry): %w", initTemplate, err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid template")
+			color.Red("✗ %v", err)
+			return err
+		}
+
+		gen := scaffold.NewExternalGenerator(cached)
+		generator = gen
+		metadata = gen.GetMetadata()
+		templateType = scaffold.TemplateType("external") // Dummy type for next steps
+
+		span.SetAttributes(
+			attribute.String("template_type", "external"),
+			attribute.String("external_source", cached.Source),
+		)
+		color.Green("✓ Found template '%s' version %s", cached.Name, cached.Version)
 	}
 
 	// Prepare generation options
@@ -141,7 +185,7 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print header with template info
-	metadata := generator.GetMetadata()
+	metadata = generator.GetMetadata()
 	color.Cyan("\n📦 Creating new AgenticGoKit project: %s\n", projectName)
 	color.Cyan("   Template: %s (%s) - %s\n", metadata.Name, metadata.Complexity, metadata.Description)
 	color.Cyan("   Files: %d | Features: %v\n", metadata.FileCount, metadata.Features)
@@ -203,16 +247,6 @@ func listTemplates() {
 		switch tmpl.Name {
 		case "Quickstart":
 			templateID = "quickstart"
-		case "Single-Agent":
-			templateID = "single-agent"
-		case "Multi-Agent":
-			templateID = "multi-agent"
-		case "Config-Driven":
-			templateID = "config-driven"
-		case "Advanced":
-			templateID = "advanced"
-		case "MCP-Tools":
-			templateID = "mcp-tools"
 		case "Workflow":
 			templateID = "workflow"
 		}
@@ -261,23 +295,9 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 	case scaffold.TemplateQuickstart:
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point with hardcoded agent config"))
 		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
-	case scaffold.TemplateSingleAgent:
-		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point with streaming support"))
-		fmt.Printf("  • %s\n", color.CyanString(".env                       # Environment variables (API keys)"))
-		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
-	case scaffold.TemplateMCPTools:
-		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Agent with MCP server config"))
-		fmt.Printf("  • %s\n", color.CyanString("README.md                  # Documentation for MCP tools"))
-		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
 	case scaffold.TemplateWorkflow:
 		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Multi-step workflow pipeline"))
 		fmt.Printf("  • %s\n", color.CyanString("README.md                  # Documentation for workflow"))
-		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
-	case scaffold.TemplateMultiAgent, scaffold.TemplateConfigDriven, scaffold.TemplateAdvanced:
-		// Complex templates structure
-		fmt.Printf("  • %s\n", color.CyanString("main.go                    # Entry point"))
-		fmt.Printf("  • %s\n", color.CyanString("config/                    # Configuration files"))
-		fmt.Printf("  • %s\n", color.CyanString("agents/                    # Agent definitions"))
 		fmt.Printf("  • %s\n", color.CyanString("go.mod                     # Go module definition"))
 	default:
 		// Generic structure for other templates
@@ -295,24 +315,10 @@ func printNextSteps(_ string, projectPath string, templateType scaffold.Template
 		fmt.Printf("  • Modify the %s to customize the agent behavior\n", color.CyanString("SystemPrompt"))
 		fmt.Printf("  • Try different LLM providers: %s, %s, %s\n",
 			color.CyanString("openai"), color.CyanString("anthropic"), color.CyanString("ollama"))
-	case scaffold.TemplateSingleAgent:
-		fmt.Printf("  • Set API keys in %s (copy from %s)\n", color.CyanString(".env"), color.CyanString(".env.example"))
-		fmt.Printf("  • Configure LLM provider and model in %s\n", color.CyanString("main.go"))
-		fmt.Printf("  • Add tools/MCP servers to extend agent capabilities\n")
-	case scaffold.TemplateMCPTools:
-		fmt.Printf("  • Run %s to initialize MCP servers\n", color.CyanString("npm install"))
-		fmt.Printf("  • Add more MCP servers in %s\n", color.CyanString("main.go"))
-		fmt.Printf("  • Use %s to view traces of tool execution\n", color.CyanString("agk trace"))
 	case scaffold.TemplateWorkflow:
 		fmt.Printf("  • Add new step in %s using .AddStep()\n", color.CyanString("main.go"))
 		fmt.Printf("  • Monitor step progress via streaming output\n")
 		fmt.Printf("  • Use %s to debug workflow execution\n", color.CyanString("agk trace"))
-	case scaffold.TemplateMultiAgent:
-		fmt.Printf("  • Define agents in %s\n", color.CyanString("agents/"))
-		fmt.Printf("  • Configure orchestration in %s\n", color.CyanString("main.go"))
-	case scaffold.TemplateConfigDriven, scaffold.TemplateAdvanced:
-		fmt.Printf("  • Modify configuration in %s\n", color.CyanString("config/"))
-		fmt.Printf("  • Extend functionality by adding new modules\n")
 	default:
 		fmt.Printf("  • Configure your LLM provider and API keys\n")
 		fmt.Printf("  • Explore the generated code to understand the structure\n")
@@ -328,7 +334,7 @@ func init() {
 	// Define flags
 	initCmd.Flags().BoolVar(&initListTemplates, "list", false, "List available templates")
 	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "quickstart",
-		"Template type: quickstart, single-agent, multi-agent, config-driven, advanced, mcp-tools, workflow")
+		"Template type: quickstart, workflow")
 	initCmd.Flags().StringVarP(&initOutputDir, "output", "o", ".", "Output directory for the project")
 	initCmd.Flags().BoolVarP(&initInteractive, "interactive", "i", false, "Enable interactive prompts")
 	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "Force overwrite existing files")
