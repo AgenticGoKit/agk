@@ -139,119 +139,239 @@ func (r *Reporter) generateJUnit(results *SuiteResults, w io.Writer) error {
 // generateMarkdown creates a detailed Markdown report
 func (r *Reporter) generateMarkdown(results *SuiteResults, w io.Writer) error {
 	fmt.Fprintf(w, "# Test Report: %s\n\n", results.SuiteName)
-	fmt.Fprintf(w, "**Generated:** %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
 
-	// Summary section
-	fmt.Fprintf(w, "## Summary\n\n")
-	fmt.Fprintf(w, "| Metric | Value |\n")
-	fmt.Fprintf(w, "|--------|-------|\n")
-	fmt.Fprintf(w, "| Total Tests | %d |\n", results.TotalTests)
-	fmt.Fprintf(w, "| Passed | %d ✓ |\n", results.PassedTests)
-	fmt.Fprintf(w, "| Failed | %d ✗ |\n", results.FailedTests)
-	fmt.Fprintf(w, "| Pass Rate | %.1f%% |\n", results.PassRate())
-	fmt.Fprintf(w, "| Duration | %s |\n\n", formatDuration(results.Duration))
-
+	// Executive Summary Banner
 	if results.AllPassed() {
-		fmt.Fprintf(w, "### ✓ All Tests Passed\n\n")
+		fmt.Fprintf(w, "> **Status: PASSED** - %d/%d tests completed successfully in %s\n\n",
+			results.PassedTests, results.TotalTests, formatDuration(results.Duration))
 	} else {
-		fmt.Fprintf(w, "### ✗ Some Tests Failed\n\n")
+		fmt.Fprintf(w, "> **Status: FAILED** - %d test(s) failed out of %d total tests. Pass rate: %.1f%%\n\n",
+			results.FailedTests, results.TotalTests, results.PassRate())
 	}
 
-	// Test Results section
-	fmt.Fprintf(w, "## Test Results\n\n")
+	fmt.Fprintf(w, "**Generated:** %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+
+	// Quick Stats with visual bars
+	fmt.Fprintf(w, "## Summary\n\n")
+	fmt.Fprintf(w, "| Metric | Value | Progress |\n")
+	fmt.Fprintf(w, "|--------|-------|----------|\n")
+	fmt.Fprintf(w, "| **Total Tests** | %d | |\n", results.TotalTests)
+	fmt.Fprintf(w, "| **Passed** | %d | %s |\n", results.PassedTests, generateBar(results.PassedTests, results.TotalTests, "✓"))
+	fmt.Fprintf(w, "| **Failed** | %d | %s |\n", results.FailedTests, generateBar(results.FailedTests, results.TotalTests, "✗"))
+	fmt.Fprintf(w, "| **Pass Rate** | %.1f%% | %s |\n", results.PassRate(), generateProgressBar(results.PassRate()))
+	fmt.Fprintf(w, "| **Duration** | %s | |\n\n", formatDuration(results.Duration))
+
+	// Quick Navigation for failed tests
+	if !results.AllPassed() {
+		fmt.Fprintf(w, "### Failed Tests\n\n")
+		for i, result := range results.Results {
+			if !result.Passed {
+				fmt.Fprintf(w, "- [%s](#%d---%s) - %.2fs\n",
+					result.TestName, i+1, strings.ReplaceAll(strings.ToLower(result.TestName), " ", "-"), result.Duration.Seconds())
+			}
+		}
+		fmt.Fprintf(w, "\n")
+	}
+
+	// Test Results section with enhanced formatting
+	fmt.Fprintf(w, "---\n\n")
+	fmt.Fprintf(w, "## Detailed Test Results\n\n")
 
 	for i, result := range results.Results {
-		if result.Passed {
-			fmt.Fprintf(w, "### %d. ✓ %s\n\n", i+1, result.TestName)
-		} else {
-			fmt.Fprintf(w, "### %d. ✗ %s\n\n", i+1, result.TestName)
+		statusBadge := "PASSED"
+		if !result.Passed {
+			statusBadge = "FAILED"
 		}
 
-		fmt.Fprintf(w, "**Status:** ")
-		if result.Passed {
-			fmt.Fprintf(w, "PASSED ✓\n\n")
-		} else {
-			fmt.Fprintf(w, "FAILED ✗\n\n")
-		}
+		fmt.Fprintf(w, "### %d. %s\n\n", i+1, result.TestName)
 
-		fmt.Fprintf(w, "**Duration:** %s\n\n", formatDuration(result.Duration))
+		// Status badge
+		fmt.Fprintf(w, "**Status:** `%s` | **Duration:** %s\n\n",
+			statusBadge, formatDuration(result.Duration))
 
-		// Semantic matching details
+		// Semantic matching details with visual confidence
 		if result.MatchStrategy != "" {
-			fmt.Fprintf(w, "**Matching Strategy:** %s\n\n", result.MatchStrategy)
+			fmt.Fprintf(w, "**Matching Strategy:** `%s`\n\n", result.MatchStrategy)
+
 			if result.Confidence > 0 {
-				fmt.Fprintf(w, "**Confidence Score:** %.2f\n\n", result.Confidence)
+				confidenceBar := generateConfidenceBar(result.Confidence)
+				fmt.Fprintf(w, "**Confidence Score:** %.0f%%\n\n", result.Confidence*100)
+				fmt.Fprintf(w, "```\n%s\n```\n\n", confidenceBar)
 			}
 
-			// Show LLM judge response prominently
+			// LLM Judge Evaluation
 			if result.MatchStrategy == "llm-judge" && result.MatchDetails != nil {
 				judgeResp, ok := result.MatchDetails["judge_response"].(string)
 				if ok {
+					fmt.Fprintf(w, "#### LLM Judge Evaluation\n\n")
 					if judgeResp != "" {
-						fmt.Fprintf(w, "**LLM Judge Evaluation:**\n\n```\n%s\n```\n\n", judgeResp)
+						// Parse verdict from response
+						verdict := "Unknown"
+						if strings.HasPrefix(strings.ToUpper(judgeResp), "YES") {
+							verdict = "Approved"
+						} else if strings.HasPrefix(strings.ToUpper(judgeResp), "NO") {
+							verdict = "Rejected"
+						}
+						fmt.Fprintf(w, "**Verdict:** %s\n\n", verdict)
+						fmt.Fprintf(w, "<details>\n<summary>View Judge's Reasoning</summary>\n\n")
+						fmt.Fprintf(w, "```\n%s\n```\n\n", judgeResp)
+						fmt.Fprintf(w, "</details>\n\n")
 					} else {
-						fmt.Fprintf(w, "**LLM Judge Evaluation:** *(empty response)*\n\n")
+						fmt.Fprintf(w, "> *Judge returned empty response*\n\n")
 					}
 				}
 			}
 
-			// Show other match details
+			// Other match details in compact format
 			if len(result.MatchDetails) > 0 {
-				fmt.Fprintf(w, "**Match Details:**\n\n")
+				fmt.Fprintf(w, "<details>\n<summary>Technical Details</summary>\n\n")
 				for k, v := range result.MatchDetails {
-					// Skip judge_response since we already showed it prominently
 					if k == "judge_response" && result.MatchStrategy == "llm-judge" {
 						continue
 					}
-					fmt.Fprintf(w, "- **%s:** %v\n", k, v)
+					fmt.Fprintf(w, "- **%s:** `%v`\n", k, v)
 				}
-				fmt.Fprintf(w, "\n")
+				fmt.Fprintf(w, "\n</details>\n\n")
 			}
 		}
 
+		// Trace information
 		if result.TraceID != "" {
-			fmt.Fprintf(w, "**Trace ID:** `%s`\n\n", result.TraceID)
-			fmt.Fprintf(w, "**Trace Location:** `.agk/runs/%s/`\n\n", result.TraceID)
+			fmt.Fprintf(w, "**Trace ID:** [`%s`](.agk/runs/%s/)\n\n", result.TraceID, result.TraceID)
 		}
 
-		if !result.Passed {
-			fmt.Fprintf(w, "**Error:**\n\n```\n%s\n```\n\n", result.ErrorMessage)
+		// Error message - prominent for failed tests
+		if !result.Passed && result.ErrorMessage != "" {
+			fmt.Fprintf(w, "#### Failure Details\n\n")
+			fmt.Fprintf(w, "```\n%s\n```\n\n", result.ErrorMessage)
 		}
 
-		if result.ExpectedOutput != "" {
-			fmt.Fprintf(w, "**Expected Output:**\n\n```\n%s\n```\n\n", result.ExpectedOutput)
+		// Expected vs Actual Comparison
+		if result.ExpectedOutput != "" || result.ActualOutput != "" {
+			fmt.Fprintf(w, "#### Output Comparison\n\n")
+
+			// Show side-by-side if both present
+			if result.ExpectedOutput != "" {
+				fmt.Fprintf(w, "<details>\n<summary>Expected Output</summary>\n\n")
+				fmt.Fprintf(w, "```\n%s\n```\n\n", result.ExpectedOutput)
+				fmt.Fprintf(w, "</details>\n\n")
+			}
+
+			if result.ActualOutput != "" {
+				fmt.Fprintf(w, "<details open>\n<summary>Actual Output</summary>\n\n")
+				fmt.Fprintf(w, "```\n%s\n```\n\n", result.ActualOutput)
+				fmt.Fprintf(w, "</details>\n\n")
+			} else if !result.Passed {
+				fmt.Fprintf(w, "> **Actual Output:** *(empty)*\n\n")
+			}
 		}
 
-		// Always show actual output for failed tests
-		if result.ActualOutput != "" {
-			fmt.Fprintf(w, "**Actual Output:**\n\n```\n%s\n```\n\n", result.ActualOutput)
-		} else if !result.Passed {
-			fmt.Fprintf(w, "**Actual Output:** *(empty)*\n\n")
-		}
-
+		// Additional metadata
 		if result.Metadata != nil && len(result.Metadata) > 0 {
-			fmt.Fprintf(w, "**Metadata:**\n\n")
+			fmt.Fprintf(w, "<details>\n<summary>Additional Metadata</summary>\n\n")
 			for k, v := range result.Metadata {
 				fmt.Fprintf(w, "- **%s:** %v\n", k, v)
 			}
-			fmt.Fprintf(w, "\n")
+			fmt.Fprintf(w, "\n</details>\n\n")
 		}
 
 		fmt.Fprintf(w, "---\n\n")
 	}
 
-	// Trace analysis section
-	fmt.Fprintf(w, "## Trace Analysis\n\n")
-	fmt.Fprintf(w, "All test execution traces are saved in `.agk/runs/`\n\n")
-	fmt.Fprintf(w, "To view detailed trace information:\n\n")
+	// Trace analysis section with helpful tips
+	fmt.Fprintf(w, "## Trace Analysis & Debugging\n\n")
+	fmt.Fprintf(w, "All test execution traces are saved in `.agk/runs/` for detailed inspection.\n\n")
+
+	if !results.AllPassed() {
+		fmt.Fprintf(w, "### Debugging Tips\n\n")
+		fmt.Fprintf(w, "1. **View detailed traces:** Use `agk trace show <trace-id>` to see step-by-step execution\n")
+		fmt.Fprintf(w, "2. **Compare outputs:** Check the Expected vs Actual sections above\n")
+		fmt.Fprintf(w, "3. **Check confidence scores:** Low scores may indicate semantic mismatch\n")
+		fmt.Fprintf(w, "4. **Review LLM judge reasoning:** Expand the judge's evaluation for insights\n\n")
+	}
+
+	fmt.Fprintf(w, "### Commands\n\n")
 	fmt.Fprintf(w, "```bash\n")
-	fmt.Fprintf(w, "# View specific trace\n")
+	fmt.Fprintf(w, "# View specific trace with full details\n")
 	fmt.Fprintf(w, "agk trace show <trace-id>\n\n")
-	fmt.Fprintf(w, "# List all traces\n")
-	fmt.Fprintf(w, "agk trace list\n")
+	fmt.Fprintf(w, "# List all available traces\n")
+	fmt.Fprintf(w, "agk trace list\n\n")
+	fmt.Fprintf(w, "# Re-run tests\n")
+	fmt.Fprintf(w, "agk eval <test-file.yaml>\n")
 	fmt.Fprintf(w, "```\n\n")
 
+	// Final summary
+	if results.AllPassed() {
+		fmt.Fprintf(w, "---\n\n")
+		fmt.Fprintf(w, "## Summary\n\n")
+		fmt.Fprintf(w, "All tests passed successfully. Your system is performing as expected.\n\n")
+	}
+
+	// Report footer with generation details
+	fmt.Fprintf(w, "---\n\n")
+	fmt.Fprintf(w, "<div align=\"center\">\n\n")
+	fmt.Fprintf(w, "**Report Generated by AGK Eval Tool**\n\n")
+	fmt.Fprintf(w, "Date: %s\n\n", time.Now().Format("Monday, January 2, 2006 at 3:04 PM MST"))
+	fmt.Fprintf(w, "Tool: AgenticGoKit (AGK) Evaluation Framework v1beta\n\n")
+	fmt.Fprintf(w, "---\n\n")
+	fmt.Fprintf(w, "*Powered by [AgenticGoKit](https://github.com/agenticgokit/agenticgokit)*\n\n")
+	fmt.Fprintf(w, "</div>\n")
+
 	return nil
+}
+
+// Helper functions
+
+// generateBar creates a visual bar representation
+func generateBar(count, total int, emoji string) string {
+	if total == 0 {
+		return ""
+	}
+	barLength := 10
+	filled := (count * barLength) / total
+	bar := strings.Repeat(emoji, filled)
+	return bar
+}
+
+// generateProgressBar creates a progress bar for percentages
+func generateProgressBar(percentage float64) string {
+	barLength := 20
+	filled := int(percentage * float64(barLength) / 100)
+	empty := barLength - filled
+
+	bar := "["
+	bar += strings.Repeat("█", filled)
+	bar += strings.Repeat("░", empty)
+	bar += "]"
+
+	return bar
+}
+
+// generateConfidenceBar creates a visual confidence meter
+func generateConfidenceBar(confidence float64) string {
+	percentage := confidence * 100
+	barLength := 50
+	filled := int(confidence * float64(barLength))
+	empty := barLength - filled
+
+	bar := ""
+	if percentage >= 80 {
+		bar += strings.Repeat("█", filled)
+	} else if percentage >= 60 {
+		bar += strings.Repeat("▓", filled)
+	} else {
+		bar += strings.Repeat("▒", filled)
+	}
+	bar += strings.Repeat("░", empty)
+	bar += fmt.Sprintf(" %.0f%%", percentage)
+
+	return bar
+}
+
+// getConfidenceEmoji returns emoji based on confidence level
+func getConfidenceEmoji(confidence float64) string {
+	// Removed - keeping for backward compatibility but not used in professional reports
+	return ""
 }
 
 // Helper functions

@@ -50,15 +50,34 @@ func (m *LLMJudgeMatcher) Match(ctx context.Context, actual string, exp Expectat
 	}
 	defer m.agent.Cleanup(ctx)
 
-	// Use non-streaming Run() since streaming returns empty chunks
-	log.Printf("[LLM Judge] Running agent (non-streaming)...")
-	result, err := m.agent.Run(ctx, prompt)
+	// Use streaming for LLM judge evaluation
+	log.Printf("[LLM Judge] Starting stream for evaluation...")
+	stream, err := m.agent.RunStream(ctx, prompt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run judge agent: %w", err)
+		return nil, fmt.Errorf("failed to start judge agent stream: %w", err)
 	}
 
-	// Get response from result
-	responseText := result.Content
+	// Collect all chunks - handle both Delta and Content fields
+	// Delta chunks (type="delta"): incremental text in Delta field
+	// Text chunks (type="text"): complete text in Content field
+	var response strings.Builder
+	for chunk := range stream.Chunks() {
+		// Prefer Delta for incremental streaming, fallback to Content for text chunks
+		if chunk.Delta != "" {
+			response.WriteString(chunk.Delta)
+		} else if chunk.Content != "" {
+			response.WriteString(chunk.Content)
+		}
+	}
+
+	// Wait for stream completion and check for errors
+	_, err = stream.Wait()
+	if err != nil {
+		return nil, fmt.Errorf("stream error: %w", err)
+	}
+
+	// Parse response
+	responseText := response.String()
 	log.Printf("[LLM Judge] Final response (%d bytes): %q", len(responseText), responseText)
 	matched, confidence, explanation := m.parseJudgment(responseText)
 
