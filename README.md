@@ -12,12 +12,13 @@ AGK is the official CLI for **AgenticGoKit**, designed to manage the entire life
 
 ## Vision: The Complete Lifecycle
 
-AGK aims to streamline the developer experience across four key pillars:
+AGK aims to streamline the developer experience across five key pillars:
 
 1.  **Create**: Scaffold powerful agents instantly using a rich registry of templates.
-2.  **Distribute**: (Planned) Share your agent architectures and workflows with the community or your team.
-3.  **Deploy**: (Planned) Seamlessly ship agents to cloud platforms, Kubernetes, or edge devices.
-4.  **Trace**: Gain deep observability into your agent's reasoning, prompts, and performance.
+2.  **Test**: Validate workflows with semantic matching and automated evaluation.
+3.  **Observe**: Gain deep observability into your agent's reasoning, prompts, and performance.
+4.  **Distribute**: (Planned) Share your agent architectures and workflows with the community or your team.
+5.  **Deploy**: (Planned) Seamlessly ship agents to cloud platforms, Kubernetes, or edge devices.
 
 ---
 
@@ -97,9 +98,58 @@ Run `agk init --list` to see all available templates including those from the re
 
 ---
 
-## 🔍 Trace Auditor
+## 🧪 Eval - Automated Testing
 
-AGK includes a powerful **Trace Auditor** to help you understand exactly what your agents are thinking.
+AGK provides a comprehensive **evaluation framework** for testing AI workflows with semantic matching, confidence scoring, and professional reports.
+
+### Features
+- **Semantic Matching**: Embedding similarity, LLM-as-judge, or hybrid strategies
+- **Confidence Scoring**: Quantify how well outputs match expectations (0.0 - 1.0)
+- **Professional Reports**: Auto-generated markdown with collapsible sections and visualizations
+- **EvalServer Integration**: HTTP server mode for automated testing
+- **Multiple Strategies**: Choose the right evaluation approach for your use case
+
+### Quick Example
+
+```yaml
+# semantic-tests.yaml
+name: "My Workflow Tests"
+description: "Evaluate AI workflow outputs"
+
+evalserver:
+  url: "http://localhost:8787"
+  workflow_name: "story"
+  timeout: "180s"
+
+semantic:
+  strategy: "llm-judge"  # or "embedding" or "hybrid"
+  threshold: 0.70
+  llm:
+    provider: "ollama"
+    model: "llama3.2"
+
+tests:
+  - name: "Generate Report Test"
+    input: "artificial intelligence"
+    expected_output: |
+      A comprehensive technical report with structured sections
+```
+
+```bash
+# Run evaluations
+agk eval semantic-tests.yaml --timeout 200
+
+# View report
+cat .agk/reports/eval-report-*.md
+```
+
+**Learn more**: See [Eval Documentation](docs/eval.md) for detailed guides on strategies, configuration, and best practices.
+
+---
+
+## 🔍 Trace - Observability
+
+AGK includes a powerful **Trace system** to help you understand exactly what your agents are thinking.
 
 ### 1. Capture Traces
 Control data granularity with `AGK_TRACE_LEVEL`:
@@ -126,10 +176,11 @@ agk trace view
 # Tip: Press 'd' on a span to see the full Prompt & Response content!
 ```
 
-**Audit Report (JSON)**
-Export structured data for automated evaluation pipelines.
+**List & Show**
+Quick access to trace summaries.
 ```bash
-agk trace audit > evaluation_dataset.json
+agk trace list
+agk trace show <trace-id>
 ```
 
 **Visual Flowchart (Mermaid)**
@@ -137,6 +188,8 @@ Generate a diagram of the agent's execution path.
 ```bash
 agk trace mermaid > trace_flow.md
 ```
+
+**Learn more**: See [Trace Documentation](docs/trace.md) for advanced usage and debugging workflows.
 
 ---
 
@@ -146,11 +199,11 @@ agk trace mermaid > trace_flow.md
 |---------|-------------|
 | `init` | Create a new project from a template. |
 | `init --list` | Show details of all available templates. |
+| `eval` | Run automated tests against workflows with semantic matching. |
 | `trace list` | List all captured trace runs. |
 | `trace show` | Display summary of a specific run. |
 | `trace view` | Open the interactive TUI trace explorer. |
-| `trace audit` | Analyze a trace for reasoning quality. |
-| `trace export` | Export trace data (OTEL, Jaeger, JSON). |
+| `trace mermaid` | Generate Mermaid flowchart of trace execution. |
 
 ---
 
@@ -159,7 +212,8 @@ agk trace mermaid > trace_flow.md
 ### Completed
 - **Template Registry System** (`list`, `add`, `remove`)
 - **Smart Scaffolding** (Quickstart, Workflow bases)
-- **Trace Auditor** (Interactive TUI & Mermaid export)
+- **Eval Framework** (Semantic matching, LLM-as-judge, professional reports)
+- **Trace System** (Interactive TUI, Mermaid export, detailed spans)
 - **Streaming Support** (Native across all templates)
 
 ### In Progress

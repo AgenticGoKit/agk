@@ -190,11 +190,7 @@ func (r *Runner) runTest(test Test, target *HTTPTarget) TestResult {
 		return result
 	}
 
-	// TODO: Validate trace expectations if specified
-	if test.Expect.Trace != nil {
-		// This would require fetching trace data from /traces/{id}
-		// For now, we'll skip trace validation
-	}
+	// TODO: Validate trace expectations if specified (test.Expect.Trace)
 
 	result.Passed = true
 	return result

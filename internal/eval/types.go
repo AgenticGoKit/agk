@@ -2,6 +2,13 @@ package eval
 
 import "time"
 
+// Matcher strategy constants
+const (
+	MatcherStrategyEmbedding = "embedding"
+	MatcherStrategyLLMJudge  = "llm-judge"
+	MatcherStrategyHybrid    = "hybrid"
+)
+
 // TestSuite represents a collection of tests
 type TestSuite struct {
 	Name        string            `yaml:"name"`

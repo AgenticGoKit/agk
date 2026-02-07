@@ -57,18 +57,18 @@ func (f *MatcherFactory) createSemanticMatcher(exp Expectation) (MatcherInterfac
 	config := f.mergeSemanticConfig(exp)
 
 	// Determine strategy
-	strategy := "llm-judge" // default
+	strategy := MatcherStrategyLLMJudge // default
 	if config.Strategy != "" {
 		strategy = config.Strategy
 	}
 
 	// Create appropriate matcher
 	switch strategy {
-	case "embedding":
+	case MatcherStrategyEmbedding:
 		return NewEmbeddingMatcher(config)
-	case "llm-judge":
+	case MatcherStrategyLLMJudge:
 		return NewLLMJudgeMatcher(config)
-	case "hybrid":
+	case MatcherStrategyHybrid:
 		return NewHybridMatcher(config)
 	default:
 		return nil, fmt.Errorf("unknown semantic strategy: %s", strategy)
@@ -79,7 +79,7 @@ func (f *MatcherFactory) createSemanticMatcher(exp Expectation) (MatcherInterfac
 func (f *MatcherFactory) mergeSemanticConfig(exp Expectation) *SemanticConfig {
 	// Start with global config or defaults
 	config := &SemanticConfig{
-		Strategy:  "llm-judge",
+		Strategy:  MatcherStrategyLLMJudge,
 		Threshold: 0.85,
 	}
 

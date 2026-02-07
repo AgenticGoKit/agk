@@ -267,7 +267,7 @@ func (r *Reporter) generateMarkdown(results *SuiteResults, w io.Writer) error {
 		}
 
 		// Additional metadata
-		if result.Metadata != nil && len(result.Metadata) > 0 {
+		if len(result.Metadata) > 0 {
 			fmt.Fprintf(w, "<details>\n<summary>Additional Metadata</summary>\n\n")
 			for k, v := range result.Metadata {
 				fmt.Fprintf(w, "- **%s:** %v\n", k, v)
@@ -366,12 +366,6 @@ func generateConfidenceBar(confidence float64) string {
 	bar += fmt.Sprintf(" %.0f%%", percentage)
 
 	return bar
-}
-
-// getConfidenceEmoji returns emoji based on confidence level
-func getConfidenceEmoji(confidence float64) string {
-	// Removed - keeping for backward compatibility but not used in professional reports
-	return ""
 }
 
 // Helper functions

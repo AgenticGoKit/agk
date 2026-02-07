@@ -48,7 +48,11 @@ func (m *LLMJudgeMatcher) Match(ctx context.Context, actual string, exp Expectat
 	if err := m.agent.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize judge agent: %w", err)
 	}
-	defer m.agent.Cleanup(ctx)
+	defer func() {
+		if err := m.agent.Cleanup(ctx); err != nil {
+			log.Printf("Warning: failed to cleanup judge agent: %v", err)
+		}
+	}()
 
 	// Use streaming for LLM judge evaluation
 	log.Printf("[LLM Judge] Starting stream for evaluation...")
@@ -96,7 +100,7 @@ func (m *LLMJudgeMatcher) Match(ctx context.Context, actual string, exp Expectat
 
 // Name returns the matcher name
 func (m *LLMJudgeMatcher) Name() string {
-	return "llm-judge"
+	return MatcherStrategyLLMJudge
 }
 
 // buildJudgePrompt constructs the prompt for the LLM judge
@@ -145,7 +149,7 @@ func (m *LLMJudgeMatcher) parseJudgment(response string) (bool, float64, string)
 	matched := strings.HasPrefix(strings.ToUpper(response), "YES")
 
 	// Extract confidence (simple heuristic)
-	confidence := 0.5
+	var confidence float64
 	if matched {
 		confidence = 0.9 // High confidence if YES
 	} else {

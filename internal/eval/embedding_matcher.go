@@ -95,7 +95,7 @@ func (m *EmbeddingMatcher) Match(ctx context.Context, actual string, exp Expecta
 
 // Name returns the matcher name
 func (m *EmbeddingMatcher) Name() string {
-	return "embedding"
+	return MatcherStrategyEmbedding
 }
 
 // cosineSimilarity calculates cosine similarity between two vectors

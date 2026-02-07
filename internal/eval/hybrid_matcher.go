@@ -89,5 +89,5 @@ func (m *HybridMatcher) Match(ctx context.Context, actual string, exp Expectatio
 
 // Name returns the matcher name
 func (m *HybridMatcher) Name() string {
-	return "hybrid"
+	return MatcherStrategyHybrid
 }
