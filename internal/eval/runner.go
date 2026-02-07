@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -15,15 +16,17 @@ type RunnerConfig struct {
 
 // Runner executes test suites
 type Runner struct {
-	config  *RunnerConfig
-	matcher *Matcher
+	config         *RunnerConfig
+	matcher        *Matcher        // Legacy matcher (deprecated)
+	matcherFactory *MatcherFactory // New matcher factory
 }
 
 // NewRunner creates a new test runner
 func NewRunner(config *RunnerConfig) *Runner {
 	return &Runner{
-		config:  config,
-		matcher: NewMatcher(),
+		config:         config,
+		matcher:        NewMatcher(), // Keep for backward compatibility
+		matcherFactory: nil,          // Will be created when needed
 	}
 }
 
@@ -35,6 +38,9 @@ func (r *Runner) Run(suite *TestSuite) (*SuiteResults, error) {
 		StartTime:  time.Now(),
 		Results:    make([]TestResult, 0, len(suite.Tests)),
 	}
+
+	// Create matcher factory with semantic config from suite
+	r.matcherFactory = NewMatcherFactory(suite.Semantic)
 
 	// Create target based on type
 	var target *HTTPTarget
@@ -107,6 +113,29 @@ func (r *Runner) runTest(test Test, target *HTTPTarget) TestResult {
 	resp, err := target.Invoke(test.Input, timeout)
 	result.Duration = time.Since(start)
 
+	if r.config.Verbose {
+		fmt.Printf("  [HTTP Response] Success=%v, Error=%q, Output=%q (length: %d bytes)\n",
+			resp != nil && resp.Success,
+			func() string {
+				if resp != nil {
+					return resp.Error
+				}
+				return ""
+			}(),
+			func() string {
+				if resp != nil {
+					return resp.Output
+				}
+				return ""
+			}(),
+			func() int {
+				if resp != nil {
+					return len(resp.Output)
+				}
+				return 0
+			}())
+	}
+
 	if err != nil {
 		result.Passed = false
 		result.ErrorMessage = fmt.Sprintf("invocation failed: %v", err)
@@ -125,11 +154,39 @@ func (r *Runner) runTest(test Test, target *HTTPTarget) TestResult {
 	result.ActualOutput = resp.Output
 	result.TraceID = resp.TraceID
 
-	// Match output against expectations
-	matched, errMsg := r.matcher.Match(resp.Output, test.Expect)
-	if !matched {
+	// Store expected output for reporting
+	if test.Expect.Value != "" {
+		result.ExpectedOutput = test.Expect.Value
+	} else if len(test.Expect.Values) > 0 {
+		result.ExpectedOutput = fmt.Sprintf("One of: %v", test.Expect.Values)
+	} else if test.Expect.Pattern != "" {
+		result.ExpectedOutput = fmt.Sprintf("Pattern: %s", test.Expect.Pattern)
+	}
+
+	// Match output against expectations using new matcher factory
+	ctx := context.Background()
+	matcher, err := r.matcherFactory.CreateMatcher(test.Expect)
+	if err != nil {
 		result.Passed = false
-		result.ErrorMessage = errMsg
+		result.ErrorMessage = fmt.Sprintf("failed to create matcher: %v", err)
+		return result
+	}
+
+	matchResult, err := matcher.Match(ctx, resp.Output, test.Expect)
+	if err != nil {
+		result.Passed = false
+		result.ErrorMessage = fmt.Sprintf("match error: %v", err)
+		return result
+	}
+
+	// Store semantic matching results
+	result.MatchStrategy = matchResult.Strategy
+	result.Confidence = matchResult.Confidence
+	result.MatchDetails = matchResult.Details
+
+	if !matchResult.Matched {
+		result.Passed = false
+		result.ErrorMessage = matchResult.Explanation
 		return result
 	}
 

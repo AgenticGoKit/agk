@@ -27,6 +27,8 @@ func (r *Reporter) Generate(results *SuiteResults, w io.Writer) error {
 		return r.generateJSON(results, w)
 	case "junit":
 		return r.generateJUnit(results, w)
+	case "markdown":
+		return r.generateMarkdown(results, w)
 	default:
 		return fmt.Errorf("unsupported format: %s", r.format)
 	}
@@ -59,6 +61,16 @@ func (r *Reporter) generateConsole(results *SuiteResults, w io.Writer) error {
 			if !result.Passed {
 				fmt.Fprintf(w, "✗ %s\n", result.TestName)
 				fmt.Fprintf(w, "  Duration: %s\n", formatDuration(result.Duration))
+
+				// Show semantic matching details if available
+				if result.MatchStrategy != "" {
+					fmt.Fprintf(w, "  Strategy: %s", result.MatchStrategy)
+					if result.Confidence > 0 {
+						fmt.Fprintf(w, " (confidence: %.2f)", result.Confidence)
+					}
+					fmt.Fprintf(w, "\n")
+				}
+
 				if result.TraceID != "" {
 					fmt.Fprintf(w, "  Trace ID: %s\n", result.TraceID)
 					fmt.Fprintf(w, "  💡 View detailed trace: agk trace show %s\n", result.TraceID)
@@ -121,6 +133,124 @@ func (r *Reporter) generateJUnit(results *SuiteResults, w io.Writer) error {
 	}
 
 	fmt.Fprintf(w, "</testsuite>\n")
+	return nil
+}
+
+// generateMarkdown creates a detailed Markdown report
+func (r *Reporter) generateMarkdown(results *SuiteResults, w io.Writer) error {
+	fmt.Fprintf(w, "# Test Report: %s\n\n", results.SuiteName)
+	fmt.Fprintf(w, "**Generated:** %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+
+	// Summary section
+	fmt.Fprintf(w, "## Summary\n\n")
+	fmt.Fprintf(w, "| Metric | Value |\n")
+	fmt.Fprintf(w, "|--------|-------|\n")
+	fmt.Fprintf(w, "| Total Tests | %d |\n", results.TotalTests)
+	fmt.Fprintf(w, "| Passed | %d ✓ |\n", results.PassedTests)
+	fmt.Fprintf(w, "| Failed | %d ✗ |\n", results.FailedTests)
+	fmt.Fprintf(w, "| Pass Rate | %.1f%% |\n", results.PassRate())
+	fmt.Fprintf(w, "| Duration | %s |\n\n", formatDuration(results.Duration))
+
+	if results.AllPassed() {
+		fmt.Fprintf(w, "### ✓ All Tests Passed\n\n")
+	} else {
+		fmt.Fprintf(w, "### ✗ Some Tests Failed\n\n")
+	}
+
+	// Test Results section
+	fmt.Fprintf(w, "## Test Results\n\n")
+
+	for i, result := range results.Results {
+		if result.Passed {
+			fmt.Fprintf(w, "### %d. ✓ %s\n\n", i+1, result.TestName)
+		} else {
+			fmt.Fprintf(w, "### %d. ✗ %s\n\n", i+1, result.TestName)
+		}
+
+		fmt.Fprintf(w, "**Status:** ")
+		if result.Passed {
+			fmt.Fprintf(w, "PASSED ✓\n\n")
+		} else {
+			fmt.Fprintf(w, "FAILED ✗\n\n")
+		}
+
+		fmt.Fprintf(w, "**Duration:** %s\n\n", formatDuration(result.Duration))
+
+		// Semantic matching details
+		if result.MatchStrategy != "" {
+			fmt.Fprintf(w, "**Matching Strategy:** %s\n\n", result.MatchStrategy)
+			if result.Confidence > 0 {
+				fmt.Fprintf(w, "**Confidence Score:** %.2f\n\n", result.Confidence)
+			}
+
+			// Show LLM judge response prominently
+			if result.MatchStrategy == "llm-judge" && result.MatchDetails != nil {
+				judgeResp, ok := result.MatchDetails["judge_response"].(string)
+				if ok {
+					if judgeResp != "" {
+						fmt.Fprintf(w, "**LLM Judge Evaluation:**\n\n```\n%s\n```\n\n", judgeResp)
+					} else {
+						fmt.Fprintf(w, "**LLM Judge Evaluation:** *(empty response)*\n\n")
+					}
+				}
+			}
+
+			// Show other match details
+			if len(result.MatchDetails) > 0 {
+				fmt.Fprintf(w, "**Match Details:**\n\n")
+				for k, v := range result.MatchDetails {
+					// Skip judge_response since we already showed it prominently
+					if k == "judge_response" && result.MatchStrategy == "llm-judge" {
+						continue
+					}
+					fmt.Fprintf(w, "- **%s:** %v\n", k, v)
+				}
+				fmt.Fprintf(w, "\n")
+			}
+		}
+
+		if result.TraceID != "" {
+			fmt.Fprintf(w, "**Trace ID:** `%s`\n\n", result.TraceID)
+			fmt.Fprintf(w, "**Trace Location:** `.agk/runs/%s/`\n\n", result.TraceID)
+		}
+
+		if !result.Passed {
+			fmt.Fprintf(w, "**Error:**\n\n```\n%s\n```\n\n", result.ErrorMessage)
+		}
+
+		if result.ExpectedOutput != "" {
+			fmt.Fprintf(w, "**Expected Output:**\n\n```\n%s\n```\n\n", result.ExpectedOutput)
+		}
+
+		// Always show actual output for failed tests
+		if result.ActualOutput != "" {
+			fmt.Fprintf(w, "**Actual Output:**\n\n```\n%s\n```\n\n", result.ActualOutput)
+		} else if !result.Passed {
+			fmt.Fprintf(w, "**Actual Output:** *(empty)*\n\n")
+		}
+
+		if result.Metadata != nil && len(result.Metadata) > 0 {
+			fmt.Fprintf(w, "**Metadata:**\n\n")
+			for k, v := range result.Metadata {
+				fmt.Fprintf(w, "- **%s:** %v\n", k, v)
+			}
+			fmt.Fprintf(w, "\n")
+		}
+
+		fmt.Fprintf(w, "---\n\n")
+	}
+
+	// Trace analysis section
+	fmt.Fprintf(w, "## Trace Analysis\n\n")
+	fmt.Fprintf(w, "All test execution traces are saved in `.agk/runs/`\n\n")
+	fmt.Fprintf(w, "To view detailed trace information:\n\n")
+	fmt.Fprintf(w, "```bash\n")
+	fmt.Fprintf(w, "# View specific trace\n")
+	fmt.Fprintf(w, "agk trace show <trace-id>\n\n")
+	fmt.Fprintf(w, "# List all traces\n")
+	fmt.Fprintf(w, "agk trace list\n")
+	fmt.Fprintf(w, "```\n\n")
+
 	return nil
 }
 

@@ -38,6 +38,7 @@ var (
 	evalValidateOnly bool
 	evalOutputFormat string
 	evalFailFast     bool
+	evalReportFile   string
 )
 
 func init() {
@@ -46,8 +47,9 @@ func init() {
 	evalCmd.Flags().IntVar(&evalTimeout, "timeout", 300, "Timeout in seconds for each test")
 	evalCmd.Flags().BoolVarP(&evalVerbose, "verbose", "v", false, "Verbose output")
 	evalCmd.Flags().BoolVar(&evalValidateOnly, "validate-only", false, "Only validate test file, don't run tests")
-	evalCmd.Flags().StringVarP(&evalOutputFormat, "format", "f", "console", "Output format (console, json, junit)")
+	evalCmd.Flags().StringVarP(&evalOutputFormat, "format", "f", "console", "Output format (console, json, junit, markdown)")
 	evalCmd.Flags().BoolVar(&evalFailFast, "fail-fast", false, "Stop on first test failure")
+	evalCmd.Flags().StringVarP(&evalReportFile, "report", "r", "", "Save detailed report to file (auto-generated if not specified)")
 }
 
 func runEval(cmd *cobra.Command, args []string) error {
@@ -107,6 +109,34 @@ func runEval(cmd *cobra.Command, args []string) error {
 	reporter := eval.NewReporter(evalOutputFormat)
 	if err := reporter.Generate(results, os.Stdout); err != nil {
 		return fmt.Errorf("failed to generate report: %w", err)
+	}
+
+	// Save detailed markdown report to file (by default)
+	reportPath := evalReportFile
+	if reportPath == "" {
+		// Auto-generate report filename
+		timestamp := time.Now().Format("20060102-150405")
+		reportDir := ".agk/reports"
+		if err := os.MkdirAll(reportDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create report directory: %v\n", err)
+		} else {
+			reportPath = filepath.Join(reportDir, fmt.Sprintf("eval-report-%s.md", timestamp))
+		}
+	}
+
+	if reportPath != "" {
+		reportFile, err := os.Create(reportPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create report file: %v\n", err)
+		} else {
+			defer reportFile.Close()
+			mdReporter := eval.NewReporter("markdown")
+			if err := mdReporter.Generate(results, reportFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write markdown report: %v\n", err)
+			} else {
+				fmt.Printf("\n📄 Detailed report saved to: %s\n", reportPath)
+			}
+		}
 	}
 
 	// Exit with error code if tests failed

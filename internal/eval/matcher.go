@@ -1,45 +1,182 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
 )
 
-// Matcher validates test outputs against expectations
-type Matcher struct{}
-
-// NewMatcher creates a new matcher
-func NewMatcher() *Matcher {
-	return &Matcher{}
+// MatchResult represents the result of a match operation
+type MatchResult struct {
+	Matched     bool                   // Whether the output matched the expectation
+	Confidence  float64                // Confidence score (0.0 - 1.0)
+	Explanation string                 // Human-readable explanation
+	Strategy    string                 // Strategy used (exact, contains, regex, semantic)
+	Details     map[string]interface{} // Strategy-specific details
 }
 
-// Match checks if actual output matches the expectation
-func (m *Matcher) Match(actual string, expect Expectation) (bool, string) {
-	switch expect.Type {
+// MatcherInterface defines the interface for output validation
+type MatcherInterface interface {
+	// Match checks if actual output matches expected criteria
+	Match(ctx context.Context, actual string, expected Expectation) (*MatchResult, error)
+
+	// Name returns the matcher strategy name
+	Name() string
+}
+
+// MatcherFactory creates matchers based on configuration
+type MatcherFactory struct {
+	semanticConfig *SemanticConfig
+}
+
+// NewMatcherFactory creates a new matcher factory
+func NewMatcherFactory(config *SemanticConfig) *MatcherFactory {
+	return &MatcherFactory{semanticConfig: config}
+}
+
+// CreateMatcher creates appropriate matcher for expectation type
+func (f *MatcherFactory) CreateMatcher(exp Expectation) (MatcherInterface, error) {
+	switch exp.Type {
 	case "exact":
-		return m.matchExact(actual, expect.Value)
+		return NewExactMatcher(), nil
 	case "contains":
-		return m.matchContains(actual, expect.Values)
+		return NewContainsMatcher(), nil
 	case "regex":
-		return m.matchRegex(actual, expect.Pattern)
+		return NewRegexMatcher(), nil
 	case "semantic":
-		return m.matchSemantic(actual, expect.Value, expect.Threshold)
+		return f.createSemanticMatcher(exp)
 	default:
-		return false, fmt.Sprintf("unknown expectation type: %s", expect.Type)
+		return nil, fmt.Errorf("unknown expectation type: %s", exp.Type)
 	}
 }
 
-// matchExact checks for exact string match
-func (m *Matcher) matchExact(actual, expected string) (bool, string) {
-	if actual == expected {
-		return true, ""
+// createSemanticMatcher creates a semantic matcher with merged configuration
+func (f *MatcherFactory) createSemanticMatcher(exp Expectation) (MatcherInterface, error) {
+	// Merge global config with test-specific overrides
+	config := f.mergeSemanticConfig(exp)
+
+	// Determine strategy
+	strategy := "llm-judge" // default
+	if config.Strategy != "" {
+		strategy = config.Strategy
 	}
-	return false, fmt.Sprintf("expected exact match:\n  Expected: %s\n  Actual:   %s", expected, actual)
+
+	// Create appropriate matcher
+	switch strategy {
+	case "embedding":
+		return NewEmbeddingMatcher(config)
+	case "llm-judge":
+		return NewLLMJudgeMatcher(config)
+	case "hybrid":
+		return NewHybridMatcher(config)
+	default:
+		return nil, fmt.Errorf("unknown semantic strategy: %s", strategy)
+	}
 }
 
-// matchContains checks if actual contains all expected values
-func (m *Matcher) matchContains(actual string, values []string) (bool, string) {
+// mergeSemanticConfig merges global semantic config with test-specific overrides
+func (f *MatcherFactory) mergeSemanticConfig(exp Expectation) *SemanticConfig {
+	// Start with global config or defaults
+	config := &SemanticConfig{
+		Strategy:  "llm-judge",
+		Threshold: 0.85,
+	}
+
+	if f.semanticConfig != nil {
+		// Copy global config
+		config.Strategy = f.semanticConfig.Strategy
+		config.Threshold = f.semanticConfig.Threshold
+		config.JudgePrompt = f.semanticConfig.JudgePrompt
+
+		if f.semanticConfig.LLM != nil {
+			llmCopy := *f.semanticConfig.LLM
+			config.LLM = &llmCopy
+		}
+
+		if f.semanticConfig.Embedding != nil {
+			embCopy := *f.semanticConfig.Embedding
+			config.Embedding = &embCopy
+		}
+	}
+
+	// Apply test-specific overrides
+	if exp.Strategy != "" {
+		config.Strategy = exp.Strategy
+	}
+
+	if exp.Threshold != nil {
+		config.Threshold = *exp.Threshold
+	}
+
+	if exp.JudgePrompt != "" {
+		config.JudgePrompt = exp.JudgePrompt
+	}
+
+	if exp.LLM != nil {
+		config.LLM = exp.LLM
+	}
+
+	if exp.Embedding != nil {
+		config.Embedding = exp.Embedding
+	}
+
+	return config
+}
+
+// ========================================
+// Built-in Matchers
+// ========================================
+
+// ExactMatcher checks for exact string match
+type ExactMatcher struct{}
+
+func NewExactMatcher() *ExactMatcher {
+	return &ExactMatcher{}
+}
+
+func (m *ExactMatcher) Match(ctx context.Context, actual string, exp Expectation) (*MatchResult, error) {
+	expected := exp.Value
+	if expected == "" && len(exp.Values) > 0 {
+		expected = exp.Values[0]
+	}
+
+	matched := actual == expected
+	confidence := 1.0
+	if !matched {
+		confidence = 0.0
+	}
+
+	explanation := "exact match"
+	if !matched {
+		explanation = fmt.Sprintf("expected exact match: %q, got: %q", expected, actual)
+	}
+
+	return &MatchResult{
+		Matched:     matched,
+		Confidence:  confidence,
+		Strategy:    "exact",
+		Explanation: explanation,
+	}, nil
+}
+
+func (m *ExactMatcher) Name() string {
+	return "exact"
+}
+
+// ContainsMatcher checks if actual contains expected values
+type ContainsMatcher struct{}
+
+func NewContainsMatcher() *ContainsMatcher {
+	return &ContainsMatcher{}
+}
+
+func (m *ContainsMatcher) Match(ctx context.Context, actual string, exp Expectation) (*MatchResult, error) {
+	values := exp.Values
+	if len(values) == 0 && exp.Value != "" {
+		values = []string{exp.Value}
+	}
+
 	actualLower := strings.ToLower(actual)
 	var missing []string
 
@@ -49,55 +186,103 @@ func (m *Matcher) matchContains(actual string, values []string) (bool, string) {
 		}
 	}
 
-	if len(missing) > 0 {
-		return false, fmt.Sprintf("missing expected values: %v", missing)
+	matched := len(missing) == 0
+	confidence := 1.0
+	if !matched {
+		confidence = 0.0
 	}
 
-	return true, ""
+	explanation := "contains all expected values"
+	if !matched {
+		explanation = fmt.Sprintf("missing expected values: %v", missing)
+	}
+
+	return &MatchResult{
+		Matched:     matched,
+		Confidence:  confidence,
+		Strategy:    "contains",
+		Explanation: explanation,
+		Details: map[string]interface{}{
+			"expected": values,
+			"missing":  missing,
+		},
+	}, nil
 }
 
-// matchRegex checks if actual matches the regex pattern
-func (m *Matcher) matchRegex(actual, pattern string) (bool, string) {
+func (m *ContainsMatcher) Name() string {
+	return "contains"
+}
+
+// RegexMatcher checks if actual matches regex pattern
+type RegexMatcher struct{}
+
+func NewRegexMatcher() *RegexMatcher {
+	return &RegexMatcher{}
+}
+
+func (m *RegexMatcher) Match(ctx context.Context, actual string, exp Expectation) (*MatchResult, error) {
+	pattern := exp.Pattern
+	if pattern == "" && exp.Value != "" {
+		pattern = exp.Value
+	}
+
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return false, fmt.Sprintf("invalid regex pattern: %v", err)
+		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
 
-	if re.MatchString(actual) {
-		return true, ""
+	matched := re.MatchString(actual)
+	confidence := 1.0
+	if !matched {
+		confidence = 0.0
 	}
 
-	return false, fmt.Sprintf("output does not match regex pattern: %s", pattern)
+	explanation := "matches regex pattern"
+	if !matched {
+		explanation = fmt.Sprintf("does not match regex pattern: %s", pattern)
+	}
+
+	return &MatchResult{
+		Matched:     matched,
+		Confidence:  confidence,
+		Strategy:    "regex",
+		Explanation: explanation,
+		Details: map[string]interface{}{
+			"pattern": pattern,
+		},
+	}, nil
 }
 
-// matchSemantic performs semantic similarity matching
-// For now, this is a simple implementation - can be enhanced with embeddings
-func (m *Matcher) matchSemantic(actual, expected string, threshold float64) (bool, string) {
-	// Simple implementation: check for significant word overlap
-	actualWords := strings.Fields(strings.ToLower(actual))
-	expectedWords := strings.Fields(strings.ToLower(expected))
+func (m *RegexMatcher) Name() string {
+	return "regex"
+}
 
-	// Count matching words
-	matches := 0
-	for _, ew := range expectedWords {
-		for _, aw := range actualWords {
-			if ew == aw {
-				matches++
-				break
-			}
-		}
+// ========================================
+// Legacy Matcher (for backward compatibility)
+// ========================================
+
+// Matcher validates test outputs against expectations (legacy)
+type Matcher struct{}
+
+// NewMatcher creates a new matcher
+func NewMatcher() *Matcher {
+	return &Matcher{}
+}
+
+// Match checks if actual output matches the expectation (legacy method)
+func (m *Matcher) Match(actual string, expect Expectation) (bool, string) {
+	ctx := context.Background()
+	factory := NewMatcherFactory(nil)
+
+	matcher, err := factory.CreateMatcher(expect)
+	if err != nil {
+		return false, err.Error()
 	}
 
-	// Calculate similarity (simple word overlap ratio)
-	similarity := float64(matches) / float64(len(expectedWords))
-
-	if threshold == 0 {
-		threshold = 0.7 // Default threshold
+	result, err := matcher.Match(ctx, actual, expect)
+	if err != nil {
+		return false, err.Error()
 	}
 
-	if similarity >= threshold {
-		return true, ""
-	}
-
-	return false, fmt.Sprintf("semantic similarity %.2f below threshold %.2f", similarity, threshold)
+	return result.Matched, result.Explanation
 }

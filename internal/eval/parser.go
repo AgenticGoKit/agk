@@ -72,10 +72,53 @@ func validateSuite(suite *TestSuite) error {
 				return fmt.Errorf("test '%s': expect.pattern is required for 'regex' type", test.Name)
 			}
 		case "semantic":
-			if test.Expect.Value == "" {
-				return fmt.Errorf("test '%s': expect.value is required for 'semantic' type", test.Name)
+			if test.Expect.Value == "" && len(test.Expect.Values) == 0 {
+				return fmt.Errorf("test '%s': expect.value or expect.values is required for 'semantic' type", test.Name)
+			}
+			// Validate semantic config if provided
+			if err := validateSemanticExpectation(&test.Expect, suite.Semantic); err != nil {
+				return fmt.Errorf("test '%s': %w", test.Name, err)
 			}
 		}
+	}
+
+	return nil
+}
+
+// validateSemanticExpectation validates semantic matching configuration
+func validateSemanticExpectation(exp *Expectation, globalConfig *SemanticConfig) error {
+	// Determine strategy (use override or global or default)
+	strategy := "llm-judge" // default
+	if exp.Strategy != "" {
+		strategy = exp.Strategy
+	} else if globalConfig != nil && globalConfig.Strategy != "" {
+		strategy = globalConfig.Strategy
+	}
+
+	// Validate based on strategy
+	switch strategy {
+	case "llm-judge":
+		// Need LLM config from somewhere
+		if exp.LLM == nil && (globalConfig == nil || globalConfig.LLM == nil) {
+			return fmt.Errorf("LLM configuration required for llm-judge strategy (provide in test or global semantic config)")
+		}
+	case "embedding":
+		// Need embedding config from somewhere
+		if exp.Embedding == nil && (globalConfig == nil || globalConfig.Embedding == nil) {
+			return fmt.Errorf("embedding configuration required for embedding strategy (provide in test or global semantic config)")
+		}
+	case "hybrid":
+		// Need both configs
+		hasLLM := exp.LLM != nil || (globalConfig != nil && globalConfig.LLM != nil)
+		hasEmb := exp.Embedding != nil || (globalConfig != nil && globalConfig.Embedding != nil)
+		if !hasLLM {
+			return fmt.Errorf("LLM configuration required for hybrid strategy")
+		}
+		if !hasEmb {
+			return fmt.Errorf("embedding configuration required for hybrid strategy")
+		}
+	default:
+		return fmt.Errorf("unknown semantic strategy: %s (valid: llm-judge, embedding, hybrid)", strategy)
 	}
 
 	return nil
