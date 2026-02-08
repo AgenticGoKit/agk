@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/agenticgokit/agenticgokit/observability"
 	"github.com/fatih/color"
@@ -48,10 +50,10 @@ Examples:
   agk init my-project
 
   # Initialize with built-in template
-  agk init my-project --template single-agent
+	agk init my-project --template quickstart
 
   # Initialize from a community template (registry)
-  agk init my-project --template rag-agent
+	agk init my-project --template <registry-template-name>
 
   # Initialize from a GitHub repository
   agk init my-project --template github.com/username/my-template
@@ -59,13 +61,13 @@ Examples:
   # Initialize from a specific version
   agk init my-project --template github.com/username/my-template@v1.0.0
 
-  # Non-interactive initialization
-  agk init my-project --template single-agent --llm openai --agent-type single --force
+	# Non-interactive initialization
+	agk init my-project --template quickstart --llm openai --force
 
   # Initialize in specific directory
   agk init my-project --output ./projects
 
-  # List available templates
+	# List available templates
   agk init --list`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		// Allow zero args only when listing templates
@@ -226,33 +228,48 @@ func listTemplates() {
 	color.Cyan("\n📋 Available AgenticGoKit Templates\n")
 	color.Cyan("═══════════════════════════════════\n\n")
 
+	// Built-in templates
 	templates := scaffold.GetAllTemplates()
+	color.Cyan("Built-in:\n")
 	for i, tmpl := range templates {
-		// Template name and complexity
 		color.Green("%d. %s %s\n", i+1, tmpl.Name, tmpl.Complexity)
-
-		// Description
 		fmt.Printf("   %s\n", color.YellowString(tmpl.Description))
-
-		// Features
 		if len(tmpl.Features) > 0 {
 			fmt.Printf("   Features: %v\n", color.CyanString("%v", tmpl.Features))
 		}
-
-		// File count
 		fmt.Printf("   Files: %s\n", color.MagentaString("%d", tmpl.FileCount))
-
-		// Usage example
-		templateID := ""
-		switch tmpl.Name {
-		case "Quickstart":
-			templateID = "quickstart"
-		case "Workflow":
-			templateID = "workflow"
-		}
-		fmt.Printf("   Usage: %s\n", color.HiBlackString("agk init my-project --template %s", templateID))
-
+		fmt.Printf("   Usage: %s\n", color.HiBlackString("agk init my-project --template %s", strings.ToLower(tmpl.Name)))
 		if i < len(templates)-1 {
+			fmt.Println()
+		}
+	}
+
+	// Registry templates
+	color.Cyan("\nRegistry:\n")
+	index, err := registry.FetchIndex(registry.DefaultRegistryURL)
+	if err != nil {
+		fmt.Printf("   %s\n", color.YellowString("Unable to fetch registry templates: %v", err))
+		fmt.Println()
+		return
+	}
+
+	if len(index.Templates) == 0 {
+		fmt.Printf("   %s\n", color.YellowString("No templates found in registry."))
+		fmt.Println()
+		return
+	}
+
+	registryNames := make([]string, 0, len(index.Templates))
+	for name := range index.Templates {
+		registryNames = append(registryNames, name)
+	}
+	sort.Strings(registryNames)
+	for i, name := range registryNames {
+		source := index.Templates[name]
+		color.Green("%d. %s\n", i+1, name)
+		fmt.Printf("   Source: %s\n", color.HiBlackString(source))
+		fmt.Printf("   Usage: %s\n", color.HiBlackString("agk init my-project --template %s", name))
+		if i < len(registryNames)-1 {
 			fmt.Println()
 		}
 	}
@@ -334,7 +351,7 @@ func init() {
 	// Define flags
 	initCmd.Flags().BoolVar(&initListTemplates, "list", false, "List available templates")
 	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "quickstart",
-		"Template type: quickstart, workflow")
+		"Template name (built-in: quickstart, workflow; or a registry template)")
 	initCmd.Flags().StringVarP(&initOutputDir, "output", "o", ".", "Output directory for the project")
 	initCmd.Flags().BoolVarP(&initInteractive, "interactive", "i", false, "Enable interactive prompts")
 	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "Force overwrite existing files")
