@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +30,26 @@ const (
 	RunListView ViewMode = iota
 	TreeView
 	DetailView
+)
+
+// FocusArea represents which panel is currently focused
+type FocusArea int
+
+const (
+	FocusTree FocusArea = iota
+	FocusDetails
+	FocusMetadata
+)
+
+// DetailTab represents the active tab in the details panel
+type DetailTab int
+
+const (
+	TabOverview DetailTab = iota
+	TabPrompt
+	TabResponse
+	TabAttributes
+	TabTiming
 )
 
 // TraceRun contains trace run metadata
@@ -57,16 +78,20 @@ type Model struct {
 	selectedRun int
 
 	// Current run data
-	runID        string
-	manifest     TraceRun
-	roots        []*SpanNode
-	visibleNodes []*SpanNode
-	cursor       int
-	viewMode     ViewMode
-	viewport     viewport.Model
-	ready        bool
-	width        int
-	height       int
+	runID            string
+	manifest         TraceRun
+	roots            []*SpanNode
+	visibleNodes     []*SpanNode
+	cursor           int
+	viewMode         ViewMode
+	focusArea        FocusArea // Current focused panel
+	selectedTab      DetailTab // Active tab in details panel
+	treeViewport     viewport.Model
+	detailViewport   viewport.Model
+	metadataViewport viewport.Model
+	ready            bool
+	width            int
+	height           int
 	// Computed metrics
 	totalTokens   int
 	estimatedCost float64
@@ -78,6 +103,11 @@ type Model struct {
 	lastOffset int64     // Bytes read so far
 	isLive     bool      // Whether we're watching for updates
 	lastUpdate time.Time // Last time file was updated
+	// Search state
+	searchMode    bool
+	searchQuery   string
+	searchMatches []*SpanNode
+	searchIndex   int
 }
 
 func calculateMetrics(nodes []*SpanNode) (totalTokens int, errorCount int, slowest *SpanNode, top3 []*SpanNode) {
@@ -168,21 +198,30 @@ func NewTraceViewerWithPath(runID string, manifest TraceRun, spans []Span, trace
 	}
 
 	return Model{
-		runID:         runID,
-		manifest:      manifest,
-		roots:         roots,
-		visibleNodes:  visible,
-		cursor:        0,
-		viewMode:      TreeView,
-		totalTokens:   totalTokens,
-		estimatedCost: estimatedCost,
-		errorCount:    errorCount,
-		slowestSpan:   slowest,
-		top3Slowest:   top3,
-		tracePath:     tracePath,
-		lastOffset:    lastOffset,
-		isLive:        tracePath != "",
-		lastUpdate:    time.Now(),
+		runID:            runID,
+		manifest:         manifest,
+		roots:            roots,
+		visibleNodes:     visible,
+		cursor:           0,
+		viewMode:         TreeView,
+		focusArea:        FocusTree,
+		selectedTab:      TabOverview,
+		treeViewport:     viewport.New(40, 10),
+		detailViewport:   viewport.New(40, 10),
+		metadataViewport: viewport.New(30, 20),
+		totalTokens:      totalTokens,
+		estimatedCost:    estimatedCost,
+		errorCount:       errorCount,
+		slowestSpan:      slowest,
+		top3Slowest:      top3,
+		tracePath:        tracePath,
+		lastOffset:       lastOffset,
+		isLive:           tracePath != "",
+		lastUpdate:       time.Now(),
+		searchMode:       false,
+		searchQuery:      "",
+		searchMatches:    make([]*SpanNode, 0),
+		searchIndex:      -1,
 	}
 }
 
@@ -263,6 +302,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case RunListView:
 			return m.updateRunListView(msg)
 		case TreeView:
+			// Handle search input mode
+			if m.searchMode {
+				return m.updateSearchInput(msg)
+			}
 			return m.updateTreeView(msg)
 		case DetailView:
 			return m.updateDetailView(msg)
@@ -272,17 +315,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+		// Calculate panel dimensions
+		availableWidth := msg.Width - 6
+		availableHeight := msg.Height - 12
+
+		leftWidth := (availableWidth * 66) / 100
+		rightWidth := availableWidth - leftWidth
+		treeHeight := (availableHeight * 40) / 100
+		if treeHeight < 10 {
+			treeHeight = 10
+		}
+		detailHeight := availableHeight - treeHeight
+		if detailHeight < 8 {
+			detailHeight = 8
+		}
+
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width-4, msg.Height-10)
-			m.viewport.YPosition = 0
+			m.treeViewport = viewport.New(leftWidth-4, treeHeight-3)
+			m.detailViewport = viewport.New(availableWidth-4, availableHeight-4)
+			m.metadataViewport = viewport.New(rightWidth-4, availableHeight-3)
 			m.ready = true
 		} else {
-			m.viewport.Width = msg.Width - 4
-			m.viewport.Height = msg.Height - 10
+			m.treeViewport.Width = leftWidth - 4
+			m.treeViewport.Height = treeHeight - 3
+			m.detailViewport.Width = availableWidth - 4
+			m.detailViewport.Height = availableHeight - 4
+			m.metadataViewport.Width = rightWidth - 4
+			m.metadataViewport.Height = availableHeight - 3
 		}
 	}
 
-	m.viewport, cmd = m.viewport.Update(msg)
+	// Update the focused viewport
+	switch m.focusArea {
+	case FocusTree:
+		m.treeViewport, cmd = m.treeViewport.Update(msg)
+	case FocusDetails:
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+	case FocusMetadata:
+		m.metadataViewport, cmd = m.metadataViewport.Update(msg)
+	}
+
 	return m, cmd
 }
 
@@ -391,7 +463,71 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
+	case "tab":
+		// Cycle focus forward: Tree -> Details -> Metadata -> Tree
+		m.focusArea = (m.focusArea + 1) % 3
+		return m, nil
+
+	case "shift+tab":
+		// Cycle focus backward
+		m.focusArea = (m.focusArea + 2) % 3 // +2 mod 3 is same as -1
+		return m, nil
+
+	case "left":
+		// Switch tabs left (always available)
+		if m.selectedTab > 0 {
+			m.selectedTab--
+		} else {
+			m.selectedTab = TabTiming // Wrap to last tab
+		}
+		return m, nil
+
+	case "right":
+		// Switch tabs right (always available)
+		if m.selectedTab < TabTiming {
+			m.selectedTab++
+		} else {
+			m.selectedTab = TabOverview // Wrap to first tab
+		}
+		return m, nil
+
+	case "h":
+		// Tree collapse only with 'h'
+		m = m.handleTreeCollapse()
+
+	case "l":
+		// Tree expand only with 'l'
+		m = m.handleTreeSelection()
+
+	case "1":
+		m.selectedTab = TabOverview
+		return m, nil
+
+	case "2":
+		m.selectedTab = TabPrompt
+		return m, nil
+
+	case "3":
+		m.selectedTab = TabResponse
+		return m, nil
+
+	case "4":
+		m.selectedTab = TabAttributes
+		return m, nil
+
+	case "5":
+		m.selectedTab = TabTiming
+		return m, nil
+
 	case "esc", "backspace":
+		// Clear search if active
+		if m.searchMode {
+			m.searchMode = false
+			m.searchQuery = ""
+			m.searchMatches = nil
+			m.searchIndex = -1
+			return m, nil
+		}
 		// Go back to run list (if we have multiple runs)
 		if len(m.allRuns) > 0 {
 			m.viewMode = RunListView
@@ -402,11 +538,8 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case KeyUp, "k", KeyDown, "j":
 		m = m.handleTreeNavigation(msg.String())
 
-	case "enter", "l", "right":
+	case "enter":
 		m = m.handleTreeSelection()
-
-	case "h", "left":
-		m = m.handleTreeCollapse()
 
 	case " ":
 		m = m.handleTreeToggle()
@@ -418,11 +551,139 @@ func (m Model) updateTreeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateDetailViewport()
 		}
 
+	case "/":
+		// Enter search mode
+		m.searchMode = true
+		m.searchQuery = ""
+		return m, nil
+
+	case "n":
+		// Next search match
+		if len(m.searchMatches) > 0 {
+			m.searchIndex = (m.searchIndex + 1) % len(m.searchMatches)
+			m = m.jumpToSearchMatch()
+		}
+		return m, nil
+
+	case "N":
+		// Previous search match
+		if len(m.searchMatches) > 0 {
+			if m.searchIndex <= 0 {
+				m.searchIndex = len(m.searchMatches) - 1
+			} else {
+				m.searchIndex--
+			}
+			m = m.jumpToSearchMatch()
+		}
+		return m, nil
+
+	case "e":
+		// Jump to next error
+		m = m.jumpToNextError()
+		return m, nil
+
+	case "E":
+		// Jump to previous error
+		m = m.jumpToPreviousError()
+		return m, nil
+
 	case "[", "]":
 		m = m.handleRunSwitching(msg.String())
 	}
 
 	return m, nil
+}
+
+// updateSearchInput handles keyboard input in search mode
+func (m Model) updateSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Cancel search
+		m.searchMode = false
+		m.searchQuery = ""
+		return m, nil
+
+	case "enter":
+		// Execute search
+		m.searchMode = false
+		m = m.executeSearch()
+		return m, nil
+
+	case "backspace":
+		// Delete character
+		if len(m.searchQuery) > 0 {
+			m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+		}
+		return m, nil
+
+	default:
+		// Add character
+		if len(msg.String()) == 1 {
+			m.searchQuery += msg.String()
+		}
+		return m, nil
+	}
+}
+
+// executeSearch performs the search and populates matches
+func (m Model) executeSearch() Model {
+	m.searchMatches = make([]*SpanNode, 0)
+	m.searchIndex = -1
+
+	if m.searchQuery == "" {
+		return m
+	}
+
+	query := strings.ToLower(m.searchQuery)
+
+	// Search through all visible nodes
+	for _, node := range m.visibleNodes {
+		if m.matchesSearch(node, query) {
+			m.searchMatches = append(m.searchMatches, node)
+		}
+	}
+
+	// Jump to first match if any
+	if len(m.searchMatches) > 0 {
+		m.searchIndex = 0
+		m = m.jumpToSearchMatch()
+	}
+
+	return m
+}
+
+// matchesSearch checks if a node matches the search query
+func (m Model) matchesSearch(node *SpanNode, query string) bool {
+	// Search in span name
+	if strings.Contains(strings.ToLower(node.Span.Name), query) {
+		return true
+	}
+
+	// Search in friendly name
+	if strings.Contains(strings.ToLower(node.Span.GetFriendlyName()), query) {
+		return true
+	}
+
+	// Search in attributes
+	attrs := node.Span.GetAllAttributes()
+	for k, v := range attrs {
+		if strings.Contains(strings.ToLower(k), query) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(fmt.Sprintf("%v", v)), query) {
+			return true
+		}
+	}
+
+	// Search in status
+	if strings.Contains(strings.ToLower(node.Span.Status.Code), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(node.Span.Status.Description), query) {
+		return true
+	}
+
+	return false
 }
 
 func (m Model) handleTreeNavigation(key string) Model {
@@ -505,18 +766,92 @@ func (m Model) handleRunSwitching(key string) Model {
 }
 
 func (m Model) updateDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
-	case "esc", "backspace", "h", "left":
+	case "esc", "backspace":
 		m.viewMode = TreeView
 		return m, nil
+
+	case "left":
+		// Switch tabs left
+		if m.selectedTab > 0 {
+			m.selectedTab--
+		} else {
+			m.selectedTab = TabTiming
+		}
+		// Update viewport content for new tab
+		node := m.visibleNodes[m.cursor]
+		var content string
+		switch m.selectedTab {
+		case TabOverview:
+			content = m.renderOverviewTab(node)
+		case TabPrompt:
+			content = m.renderPromptTab(node)
+		case TabResponse:
+			content = m.renderResponseTab(node)
+		case TabAttributes:
+			content = m.renderAttributesTab(node)
+		case TabTiming:
+			content = m.renderTimingTab(node)
+		}
+		m.detailViewport.SetContent(content)
+		return m, nil
+
+	case "right":
+		// Switch tabs right
+		if m.selectedTab < TabTiming {
+			m.selectedTab++
+		} else {
+			m.selectedTab = TabOverview
+		}
+		// Update viewport content for new tab
+		node := m.visibleNodes[m.cursor]
+		var content string
+		switch m.selectedTab {
+		case TabOverview:
+			content = m.renderOverviewTab(node)
+		case TabPrompt:
+			content = m.renderPromptTab(node)
+		case TabResponse:
+			content = m.renderResponseTab(node)
+		case TabAttributes:
+			content = m.renderAttributesTab(node)
+		case TabTiming:
+			content = m.renderTimingTab(node)
+		}
+		m.detailViewport.SetContent(content)
+		return m, nil
+
+	case "1":
+		m.selectedTab = TabOverview
+		m.detailViewport.SetContent(m.renderOverviewTab(m.visibleNodes[m.cursor]))
+		return m, nil
+	case "2":
+		m.selectedTab = TabPrompt
+		m.detailViewport.SetContent(m.renderPromptTab(m.visibleNodes[m.cursor]))
+		return m, nil
+	case "3":
+		m.selectedTab = TabResponse
+		m.detailViewport.SetContent(m.renderResponseTab(m.visibleNodes[m.cursor]))
+		return m, nil
+	case "4":
+		m.selectedTab = TabAttributes
+		m.detailViewport.SetContent(m.renderAttributesTab(m.visibleNodes[m.cursor]))
+		return m, nil
+	case "5":
+		m.selectedTab = TabTiming
+		m.detailViewport.SetContent(m.renderTimingTab(m.visibleNodes[m.cursor]))
+		return m, nil
+
+	default:
+		// Pass all other keys to viewport for scrolling
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
 	}
 
-	// Let viewport handle scrolling
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
 }
 
@@ -526,7 +861,7 @@ func (m *Model) updateDetailViewport() {
 	}
 	node := m.visibleNodes[m.cursor]
 	content := m.renderDetailContent(node)
-	m.viewport.SetContent(content)
+	m.detailViewport.SetContent(content)
 }
 
 // View renders the model
@@ -535,11 +870,11 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	var content strings.Builder
+	// Use a fixed-height container to prevent scrolling
+	var lines []string
 
 	// 1. Global Header
-	content.WriteString(m.renderGlobalHeader())
-	content.WriteString("\n")
+	lines = append(lines, m.renderGlobalHeader())
 
 	// 2. Main Content
 	var mainContent string
@@ -553,14 +888,30 @@ func (m Model) View() string {
 	default:
 		mainContent = m.renderRunListView()
 	}
-	content.WriteString(mainContent)
-	content.WriteString("\n\n")
+	lines = append(lines, mainContent)
 
-	// 3. Global Footer / Help
-	// For now, let's let render methods handle their content but WITHOUT the header.
-	// And wrap everything in BoxStyle here.
+	// 3. Fixed Status/Help Bar at bottom
+	lines = append(lines, m.renderStatusBar())
 
-	return BoxStyle.Width(m.width - 2).Render(content.String())
+	// Join all parts
+	output := strings.Join(lines, "\n")
+
+	// Ensure we don't exceed terminal height but keep the status bar visible
+	outputLines := strings.Split(output, "\n")
+	if len(outputLines) > m.height {
+		// Keep first lines (header) and last line (status bar), truncate middle
+		keepTop := 5    // Header lines
+		keepBottom := 1 // Status bar
+		if len(outputLines) > keepTop+keepBottom {
+			middle := m.height - keepTop - keepBottom
+			if middle > 0 {
+				outputLines = append(outputLines[:keepTop+middle], outputLines[len(outputLines)-keepBottom:]...)
+			}
+		}
+		output = strings.Join(outputLines, "\n")
+	}
+
+	return output
 }
 
 func (m Model) renderGlobalHeader() string {
@@ -578,6 +929,92 @@ func (m Model) renderGlobalHeader() string {
 
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", m.width-6))
+
+	return b.String()
+}
+
+func (m Model) renderStatusBar() string {
+	var b strings.Builder
+
+	// Separator line
+	b.WriteString(strings.Repeat("─", m.width-4))
+	b.WriteString("\n")
+
+	// Build status bar based on current view and state
+	var statusParts []string
+
+	// Current view/focus indicator
+	focusIndicator := ""
+	switch m.viewMode {
+	case RunListView:
+		focusIndicator = "Run List"
+	case TreeView:
+		switch m.focusArea {
+		case FocusTree:
+			focusIndicator = "Tree"
+		case FocusDetails:
+			tabs := []string{"Overview", "Prompt", "Response", "Attributes", "Timing"}
+			focusIndicator = "Details:" + tabs[m.selectedTab]
+		case FocusMetadata:
+			focusIndicator = "Metadata"
+		}
+	case DetailView:
+		tabs := []string{"Overview", "Prompt", "Response", "Attributes", "Timing"}
+		focusIndicator = "Detail:" + tabs[m.selectedTab]
+	}
+	statusParts = append(statusParts, SelectedStyle.Render(" "+focusIndicator+" "))
+
+	// Key bindings based on current state
+	var keys []string
+
+	if m.searchMode {
+		keys = []string{
+			HelpKeyStyle.Render("[Type]") + " Search",
+			HelpKeyStyle.Render("[Enter]") + " Confirm",
+			HelpKeyStyle.Render("[Esc]") + " Cancel",
+		}
+	} else {
+		switch m.viewMode {
+		case RunListView:
+			keys = []string{
+				HelpKeyStyle.Render("[↑↓]") + " Navigate",
+				HelpKeyStyle.Render("[Enter]") + " Open",
+				HelpKeyStyle.Render("[q]") + " Quit",
+			}
+		case TreeView:
+			keys = []string{
+				HelpKeyStyle.Render("[Tab]") + " Focus",
+				HelpKeyStyle.Render("[←→]") + " Tabs",
+				HelpKeyStyle.Render("[↑↓]") + " Nav",
+				HelpKeyStyle.Render("[h/l]") + " Fold",
+				HelpKeyStyle.Render("[d]") + " Detail",
+				HelpKeyStyle.Render("[/]") + " Search",
+				HelpKeyStyle.Render("[e]") + " Errors",
+				HelpKeyStyle.Render("[q]") + " Quit",
+			}
+		case DetailView:
+			keys = []string{
+				HelpKeyStyle.Render("[←→]") + " Tabs",
+				HelpKeyStyle.Render("[1-5]") + " Jump",
+				HelpKeyStyle.Render("[↑↓]") + " Scroll",
+				HelpKeyStyle.Render("[Esc]") + " Back",
+				HelpKeyStyle.Render("[q]") + " Quit",
+			}
+		}
+	}
+
+	// Add search status if active
+	if len(m.searchMatches) > 0 && !m.searchMode {
+		statusParts = append(statusParts, SuccessStyle.Render(fmt.Sprintf("🔍 %d matches", len(m.searchMatches))))
+	}
+
+	// Combine status and keys
+	statusLine := strings.Join(statusParts, " ")
+	if len(keys) > 0 {
+		statusLine += "  " + strings.Join(keys, " ")
+	}
+
+	b.WriteString(HelpStyle.Render(statusLine))
 
 	return b.String()
 }
@@ -642,98 +1079,537 @@ func (m Model) renderRunListView() string {
 		}
 	}
 
-	b.WriteString("\n\n")
-	// Help bar (keeping here for now as it changes per view)
-	help := HelpKeyStyle.Render("[↑↓]") + " Navigate  " +
-		HelpKeyStyle.Render("[Enter]") + " View spans  " +
-		HelpKeyStyle.Render("[q]") + " Quit"
-	b.WriteString(HelpStyle.Render(help))
-
-	return b.String() // Return raw string, View() wraps it
+	b.WriteString("\n")
+	return b.String()
 }
 
 func (m Model) renderTreeView() string {
 	var b strings.Builder
+
+	// Count lines used for non-panel content
+	usedLines := 0
 
 	// Back indicator
 	if len(m.allRuns) > 0 {
 		backHint := MutedStyle.Render(fmt.Sprintf("[Esc] Back to list  |  Run %d/%d", m.selectedRun+1, len(m.allRuns)))
 		b.WriteString(backHint)
 		b.WriteString("\n")
+		usedLines += 2
 	}
 
 	// Run Details Header (Specific to this view)
 	header := m.renderRunSummary()
 	b.WriteString(header)
 	b.WriteString("\n")
+	// Count lines in header (approximately 4-6 lines)
+	usedLines += strings.Count(header, "\n") + 2
 
-	// Split-pane layout using lipgloss.JoinHorizontal
-	leftWidth := (m.width - 10) * 55 / 100   // 55% for tree
-	rightWidth := (m.width - 10) - leftWidth // Rest for details
-
-	// Render left pane (tree)
-	treeContent := m.renderSpanTree()
-	leftPane := LeftPaneStyle.Width(leftWidth).Render(treeContent)
-
-	// Render right pane (details)
-	var rightContent string
-	if m.cursor < len(m.visibleNodes) {
-		rightContent = m.renderQuickDetails(m.visibleNodes[m.cursor])
+	// Calculate dimensions for 3-panel layout
+	// Account for: global header (3), run header (counted above), status bar (2), search (1 if active), padding
+	headerFooterLines := 3 + usedLines + 2 // status bar
+	if m.searchMode {
+		headerFooterLines += 1
 	}
-	rightPane := RightPaneStyle.Width(rightWidth).Render(rightContent)
 
-	// Join panes horizontally
-	splitView := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	availableWidth := m.width - 6
+	availableHeight := m.height - headerFooterLines
+	if availableHeight < 20 {
+		availableHeight = 20 // Minimum height
+	}
+
+	// Responsive layout check
+	if availableWidth < 100 {
+		// Stack vertically for narrow terminals
+		return m.renderStackedLayout()
+	}
+
+	// Panel widths: Left 66%, Right 34%
+	leftWidth := (availableWidth * 66) / 100
+	rightWidth := availableWidth - leftWidth
+
+	// Left panel heights: Tree 40%, Details 60%
+	treeHeight := (availableHeight * 40) / 100
+	if treeHeight < 10 {
+		treeHeight = 10
+	}
+	detailHeight := availableHeight - treeHeight
+	if detailHeight < 8 {
+		detailHeight = 8
+		treeHeight = availableHeight - detailHeight
+	}
+
+	// Render three panels
+	treeContent := m.renderTreePanel()
+	detailContent := m.renderDetailPanel()
+	metadataContent := m.renderMetadataPanel()
+
+	// Apply focus styling
+	treeStyle := LeftPaneStyle.Width(leftWidth).Height(treeHeight)
+	detailStyle := LeftPaneStyle.Width(leftWidth).Height(detailHeight)
+	metadataStyle := RightPaneStyle.Width(rightWidth).Height(availableHeight)
+
+	if m.focusArea == FocusTree {
+		treeStyle = treeStyle.BorderForeground(lipgloss.Color("#06B6D4")).BorderStyle(lipgloss.ThickBorder())
+	}
+	if m.focusArea == FocusDetails {
+		detailStyle = detailStyle.BorderForeground(lipgloss.Color("#06B6D4")).BorderStyle(lipgloss.ThickBorder())
+	}
+	if m.focusArea == FocusMetadata {
+		metadataStyle = metadataStyle.BorderForeground(lipgloss.Color("#06B6D4")).BorderStyle(lipgloss.ThickBorder())
+	}
+
+	// Build left column (tree + details stacked)
+	leftColumn := lipgloss.JoinVertical(
+		lipgloss.Left,
+		treeStyle.Render(treeContent),
+		detailStyle.Render(detailContent),
+	)
+
+	// Join left and right columns
+	splitView := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftColumn,
+		metadataStyle.Render(metadataContent),
+	)
 	b.WriteString(splitView)
 
-	// Help bar
-	help := m.renderHelpBar()
-	b.WriteString("\n")
-	b.WriteString(help)
+	// Search bar (if active)
+	if m.searchMode {
+		b.WriteString("\n")
+		b.WriteString(m.renderSearchBar())
+	}
 
 	return b.String()
 }
 
-// renderQuickDetails renders a compact detail view for the right panel
-func (m Model) renderQuickDetails(node *SpanNode) string {
+// renderTreePanel renders the trace tree panel
+func (m Model) renderTreePanel() string {
 	var b strings.Builder
 
-	// Header with friendly name and hint
-	b.WriteString(HeaderStyle.Render("📋 Details"))
-	b.WriteString(" " + MutedStyle.Render("[d] Full Details"))
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", 30))
-	b.WriteString("\n\n")
-
-	// Span name
-	b.WriteString(fmt.Sprintf("Name: %s\n", node.Span.GetFriendlyName()))
-	b.WriteString(fmt.Sprintf("Duration: %dms\n", node.DurationMs))
+	title := "Trace Tree"
+	if m.focusArea == FocusTree {
+		title = "▶ " + title
+	}
+	b.WriteString(HeaderStyle.Render(title))
 	b.WriteString("\n")
 
-	// Key attributes
-	attrs := node.Span.GetImportantAttributes()
-	if len(attrs) > 0 {
-		b.WriteString(MutedStyle.Render("Attributes:"))
-		b.WriteString("\n")
-		for k, v := range attrs {
-			// Clean up key names for display
-			shortKey := strings.TrimPrefix(k, "agk.")
-			shortKey = strings.TrimPrefix(shortKey, "llm.")
-			shortKey = strings.TrimPrefix(shortKey, "workflow.")
-			b.WriteString(fmt.Sprintf("  %s: %v\n", shortKey, v))
+	// Build full content for viewport
+	var content strings.Builder
+	for i, node := range m.visibleNodes {
+		line := m.renderSpanLine(node, i == m.cursor)
+		content.WriteString(line)
+		content.WriteString("\n")
+	}
+
+	// Set viewport content
+	m.treeViewport.SetContent(content.String())
+
+	// Auto-scroll to cursor
+	if m.cursor < len(m.visibleNodes) {
+		// Calculate line position and ensure it's visible
+		if m.cursor < m.treeViewport.YOffset {
+			m.treeViewport.YOffset = m.cursor
+		} else if m.cursor >= m.treeViewport.YOffset+m.treeViewport.Height {
+			m.treeViewport.YOffset = m.cursor - m.treeViewport.Height + 1
 		}
 	}
 
-	// Status
-	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset {
-		if node.Span.Status.Code == "Ok" {
-			b.WriteString("\n" + SuccessStyle.Render("✓ Success"))
+	b.WriteString(m.treeViewport.View())
+	return b.String()
+}
+
+// renderDetailPanel renders the details panel for selected node
+func (m Model) renderDetailPanel() string {
+	var b strings.Builder
+
+	// Tab bar
+	tabs := []string{"Overview", "Prompt", "Response", "Attributes", "Timing"}
+	var tabBar strings.Builder
+	for i, tab := range tabs {
+		if DetailTab(i) == m.selectedTab {
+			// Active tab - highlighted
+			if m.focusArea == FocusDetails {
+				tabBar.WriteString(SelectedStyle.Bold(true).Render(" " + tab + " "))
+			} else {
+				tabBar.WriteString(SelectedStyle.Render(" " + tab + " "))
+			}
 		} else {
-			b.WriteString("\n" + ErrorStyle.Render("✗ Error: "+node.Span.Status.Description))
+			// Inactive tab
+			tabBar.WriteString(MutedStyle.Render(" " + tab + " "))
 		}
+		if i < len(tabs)-1 {
+			tabBar.WriteString(MutedStyle.Render("│"))
+		}
+	}
+	b.WriteString(tabBar.String())
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 60))
+	b.WriteString("\n")
+
+	if m.cursor >= len(m.visibleNodes) {
+		b.WriteString(MutedStyle.Render("No span selected"))
+		return b.String()
+	}
+
+	node := m.visibleNodes[m.cursor]
+
+	// Render content based on selected tab
+	var content string
+	switch m.selectedTab {
+	case TabOverview:
+		content = m.renderOverviewTab(node)
+	case TabPrompt:
+		content = m.renderPromptTab(node)
+	case TabResponse:
+		content = m.renderResponseTab(node)
+	case TabAttributes:
+		content = m.renderAttributesTab(node)
+	case TabTiming:
+		content = m.renderTimingTab(node)
+	}
+
+	// Set viewport content
+	m.detailViewport.SetContent(content)
+	b.WriteString(m.detailViewport.View())
+
+	return b.String()
+}
+
+// renderOverviewTab renders the overview tab content
+func (m Model) renderOverviewTab(node *SpanNode) string {
+	var b strings.Builder
+
+	b.WriteString(SectionHeaderStyle.Render("Overview"))
+	b.WriteString("\n\n")
+
+	b.WriteString(fmt.Sprintf("%-12s %s\n", "Name:", node.Span.GetFriendlyName()))
+	b.WriteString(fmt.Sprintf("%-12s %s\n", "Type:", node.Span.GetSpanType()))
+	b.WriteString(fmt.Sprintf("%-12s %dms\n", "Duration:", node.DurationMs))
+
+	// Status
+	statusText := "OK"
+	statusStyle := SuccessStyle
+	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset && node.Span.Status.Code != "Ok" {
+		statusText = node.Span.Status.Code
+		statusStyle = ErrorStyle
+	}
+	b.WriteString(fmt.Sprintf("%-12s %s\n", "Status:", statusStyle.Render(statusText)))
+
+	if node.Span.Status.Description != "" {
+		b.WriteString(fmt.Sprintf("%-12s %s\n", "Message:", node.Span.Status.Description))
+	}
+
+	// Resource usage summary
+	attrs := node.Span.GetAllAttributes()
+	if tokens, ok := attrs["llm.usage.total_tokens"]; ok {
+		b.WriteString("\n")
+		b.WriteString(SectionHeaderStyle.Render("Resource Usage"))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%-12s %v\n", "Tokens:", tokens))
+		if promptTokens, ok := attrs["llm.usage.prompt_tokens"]; ok {
+			b.WriteString(fmt.Sprintf("%-12s %v\n", "  Prompt:", promptTokens))
+		}
+		if completionTokens, ok := attrs["llm.usage.completion_tokens"]; ok {
+			b.WriteString(fmt.Sprintf("%-12s %v\n", "  Response:", completionTokens))
+		}
+	}
+
+	if model, ok := attrs["llm.model"]; ok {
+		b.WriteString(fmt.Sprintf("%-12s %v\n", "Model:", model))
 	}
 
 	return b.String()
+}
+
+// renderPromptTab renders the prompt tab content
+func (m Model) renderPromptTab(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+
+	// System Prompt
+	if systemPrompt, ok := attrs["agk.prompt.system"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("System Prompt"))
+		b.WriteString("\n\n")
+		b.WriteString(systemPrompt.(string))
+		b.WriteString("\n\n")
+	}
+
+	// User Prompt
+	if userPrompt, ok := attrs["agk.prompt.user"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("User Prompt"))
+		b.WriteString("\n\n")
+		b.WriteString(userPrompt.(string))
+		b.WriteString("\n\n")
+	}
+
+	// Messages (if structured)
+	if messages, ok := attrs["llm.request.messages"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("Messages"))
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("%v", messages))
+		b.WriteString("\n\n")
+	}
+
+	if b.Len() == 0 {
+		b.WriteString(MutedStyle.Render("No prompt data available for this span"))
+	}
+
+	return b.String()
+}
+
+// renderResponseTab renders the response tab content
+func (m Model) renderResponseTab(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+
+	// Response Text
+	if response, ok := attrs["agk.llm.response"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("Response Text"))
+		b.WriteString("\n\n")
+		b.WriteString(response.(string))
+		b.WriteString("\n\n")
+	}
+
+	// Tool Results
+	if toolResult, ok := attrs["agk.tool.result"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("Tool Result"))
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("%v", toolResult))
+		b.WriteString("\n\n")
+	}
+
+	// Finish Reason
+	if finishReason, ok := attrs["llm.response.finish_reason"]; ok {
+		b.WriteString(SectionHeaderStyle.Render("Finish Reason"))
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("%v", finishReason))
+		b.WriteString("\n\n")
+	}
+
+	if b.Len() == 0 {
+		b.WriteString(MutedStyle.Render("No response data available for this span"))
+	}
+
+	return b.String()
+}
+
+// renderAttributesTab renders all attributes in table format
+func (m Model) renderAttributesTab(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+
+	b.WriteString(SectionHeaderStyle.Render("All Attributes"))
+	b.WriteString("\n\n")
+
+	if len(attrs) == 0 {
+		b.WriteString(MutedStyle.Render("No attributes available"))
+		return b.String()
+	}
+
+	// Sort keys for consistent display
+	keys := make([]string, 0, len(attrs))
+	for k := range attrs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Display as key-value table
+	for _, k := range keys {
+		v := attrs[k]
+		// Clean up key for display
+		displayKey := k
+		displayKey = strings.TrimPrefix(displayKey, "agk.")
+		displayKey = strings.TrimPrefix(displayKey, "llm.")
+		displayKey = strings.TrimPrefix(displayKey, "workflow.")
+
+		b.WriteString(fmt.Sprintf("%-30s %v\n", AttributeKeyStyle.Render(displayKey+":"), v))
+	}
+
+	return b.String()
+}
+
+// renderTimingTab renders timing information and breakdown
+func (m Model) renderTimingTab(node *SpanNode) string {
+	var b strings.Builder
+	attrs := node.Span.GetAllAttributes()
+
+	b.WriteString(SectionHeaderStyle.Render("Timing Details"))
+	b.WriteString("\n\n")
+
+	b.WriteString(fmt.Sprintf("%-15s %dms\n", "Duration:", node.DurationMs))
+	b.WriteString(fmt.Sprintf("%-15s %s\n", "Start Time:", node.Span.StartTime))
+	b.WriteString(fmt.Sprintf("%-15s %s\n", "End Time:", node.Span.EndTime))
+	b.WriteString("\n")
+
+	// Timing breakdown if child spans exist
+	if len(node.Children) > 0 {
+		b.WriteString(SectionHeaderStyle.Render("Child Spans"))
+		b.WriteString("\n\n")
+
+		var totalChildTime int64
+		for _, child := range node.Children {
+			totalChildTime += child.DurationMs
+			percentage := float64(child.DurationMs) / float64(node.DurationMs) * 100
+
+			bar := ""
+			barWidth := int(percentage / 2) // 50 chars max
+			if barWidth > 0 {
+				bar = strings.Repeat("█", barWidth)
+			}
+
+			b.WriteString(fmt.Sprintf("%-30s %5dms %6.1f%% %s\n",
+				child.Span.GetFriendlyName(),
+				child.DurationMs,
+				percentage,
+				DurationStyle.Render(bar)))
+		}
+
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%-30s %5dms\n", "Total Child Time:", totalChildTime))
+
+		selfTime := node.DurationMs - totalChildTime
+		if selfTime > 0 {
+			b.WriteString(fmt.Sprintf("%-30s %5dms\n", "Self Time:", selfTime))
+		}
+	}
+
+	// Performance markers if available
+	if ttft, ok := attrs["llm.time_to_first_token"]; ok {
+		b.WriteString("\n")
+		b.WriteString(SectionHeaderStyle.Render("Performance Metrics"))
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("%-25s %v\n", "Time to First Token:", ttft))
+	}
+
+	return b.String()
+}
+
+// renderMetadataPanel renders the metadata/diagnostics panel
+func (m Model) renderMetadataPanel() string {
+	var b strings.Builder
+
+	title := "Metadata"
+	if m.focusArea == FocusMetadata {
+		title = "▶ " + title
+	}
+	b.WriteString(HeaderStyle.Render(title))
+	b.WriteString(" " + MutedStyle.Render("[↑↓] Scroll"))
+	b.WriteString("\n")
+
+	if m.cursor >= len(m.visibleNodes) {
+		return b.String()
+	}
+
+	node := m.visibleNodes[m.cursor]
+	attrs := node.Span.GetAllAttributes()
+
+	// Build full content for viewport
+	var content strings.Builder
+
+	// === PINNED SECTIONS ===
+
+	// Identity
+	content.WriteString(SectionHeaderStyle.Render("Identity"))
+	content.WriteString("\n")
+	content.WriteString(fmt.Sprintf("%-12s %s\n", "Type:", node.Span.GetSpanType()))
+	content.WriteString(fmt.Sprintf("%-12s %s\n", "Span ID:", MutedStyle.Render(node.Span.SpanContext.SpanID[:8]+"...")))
+	if node.Parent != nil {
+		content.WriteString(fmt.Sprintf("%-12s %s\n", "Parent:", MutedStyle.Render(node.Parent.Span.SpanContext.SpanID[:8]+"...")))
+	}
+	content.WriteString("\n")
+
+	// Status
+	content.WriteString(SectionHeaderStyle.Render("Status"))
+	content.WriteString("\n")
+	statusText := "OK"
+	statusStyle := SuccessStyle
+	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset && node.Span.Status.Code != "Ok" {
+		statusText = node.Span.Status.Code
+		statusStyle = ErrorStyle
+	}
+	content.WriteString(fmt.Sprintf("%-12s %s\n", "Status:", statusStyle.Render(statusText)))
+	content.WriteString("\n")
+
+	// Timing
+	content.WriteString(SectionHeaderStyle.Render("Timing"))
+	content.WriteString("\n")
+	content.WriteString(fmt.Sprintf("%-12s %dms\n", "Duration:", node.DurationMs))
+	content.WriteString(fmt.Sprintf("%-12s %s\n", "Start:", MutedStyle.Render(node.Span.StartTime)))
+	content.WriteString("\n")
+
+	// === SCROLLABLE SECTIONS ===
+
+	// Resources
+	if tokens, ok := attrs["llm.usage.total_tokens"]; ok {
+		content.WriteString(SectionHeaderStyle.Render("Resources"))
+		content.WriteString("\n")
+		content.WriteString(fmt.Sprintf("%-12s %v\n", "Tokens:", tokens))
+		if cost := float64(node.DurationMs) * 0.000001; cost > 0 {
+			content.WriteString(fmt.Sprintf("%-12s %s\n", "Est. Cost:", WarningStyle.Render(fmt.Sprintf("$%.6f", cost))))
+		}
+		content.WriteString("\n")
+	}
+
+	// Errors
+	if node.Span.Status.Code != "" && node.Span.Status.Code != StatusUnset && node.Span.Status.Code != "Ok" {
+		content.WriteString(SectionHeaderStyle.Render("Error"))
+		content.WriteString("\n")
+		content.WriteString(ErrorStyle.Render(node.Span.Status.Description))
+		content.WriteString("\n\n")
+	}
+
+	// Tags (all attributes)
+	content.WriteString(SectionHeaderStyle.Render("All Attributes"))
+	content.WriteString("\n")
+	for k, v := range attrs {
+		shortKey := strings.TrimPrefix(k, "agk.")
+		shortKey = strings.TrimPrefix(shortKey, "llm.")
+		shortKey = strings.TrimPrefix(shortKey, "workflow.")
+		content.WriteString(fmt.Sprintf("%-20s %v\n", shortKey+":", v))
+	}
+
+	// Set viewport content
+	m.metadataViewport.SetContent(content.String())
+
+	b.WriteString(m.metadataViewport.View())
+	return b.String()
+}
+
+// renderStackedLayout renders panels vertically for narrow terminals
+func (m Model) renderStackedLayout() string {
+	var b strings.Builder
+
+	b.WriteString(WarningStyle.Render("⚠ Terminal narrow - stacked layout"))
+	b.WriteString("\n\n")
+
+	// Tree first
+	treeContent := m.renderTreePanel()
+	b.WriteString(BoxStyle.Render(treeContent))
+	b.WriteString("\n")
+
+	// Details second
+	if m.cursor < len(m.visibleNodes) {
+		detailContent := m.renderDetailPanel()
+		b.WriteString(BoxStyle.Render(detailContent))
+		b.WriteString("\n")
+	}
+
+	// Metadata last
+	if m.cursor < len(m.visibleNodes) {
+		metadataContent := m.renderMetadataPanel()
+		b.WriteString(BoxStyle.Render(metadataContent))
+	}
+
+	return b.String()
+}
+
+// renderSearchBar renders the search input bar
+func (m Model) renderSearchBar() string {
+	prompt := "Search: " + m.searchQuery + "█"
+	if len(m.searchMatches) > 0 {
+		prompt += fmt.Sprintf(" (%d matches)", len(m.searchMatches))
+	}
+	return BoxStyle.Render(prompt)
 }
 
 func (m Model) renderRunSummary() string { // Previously renderHeader
@@ -788,40 +1664,6 @@ func (m Model) renderRunSummary() string { // Previously renderHeader
 	return strings.Join(lines, "\n") + "\n" + strings.Repeat("─", m.width-6)
 }
 
-func (m Model) renderSpanTree() string {
-	var b strings.Builder
-
-	// Calculate visible area
-	maxVisible := m.height - 12
-	if maxVisible < 5 {
-		maxVisible = 5
-	}
-
-	// Calculate scroll offset
-	scrollOffset := 0
-	if m.cursor >= maxVisible {
-		scrollOffset = m.cursor - maxVisible + 1
-	}
-
-	for i, node := range m.visibleNodes {
-		if i < scrollOffset || i >= scrollOffset+maxVisible {
-			continue
-		}
-
-		line := m.renderSpanLine(node, i == m.cursor)
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-
-	// Scroll indicator
-	if len(m.visibleNodes) > maxVisible {
-		indicator := MutedStyle.Render(fmt.Sprintf("  [%d/%d spans]", m.cursor+1, len(m.visibleNodes)))
-		b.WriteString(indicator)
-	}
-
-	return b.String()
-}
-
 func (m Model) renderSpanLine(node *SpanNode, selected bool) string {
 	// Indentation
 	indent := strings.Repeat("  ", node.Depth)
@@ -860,11 +1702,17 @@ func (m Model) renderSpanLine(node *SpanNode, selected bool) string {
 		errorIndicator = ErrorStyle.Render(" [ERR]")
 	}
 
+	// Search match indicator
+	searchIndicator := ""
+	if m.isSearchMatch(node) {
+		searchIndicator = " 🔍"
+	}
+
 	// Duration
 	duration := DurationStyle.Render(fmt.Sprintf("(%dms)", node.DurationMs))
 
 	// Build line
-	line := fmt.Sprintf("%s%s%s%s%s %s", indent, prefix, name, context, errorIndicator, duration)
+	line := fmt.Sprintf("%s%s%s%s%s%s %s", indent, prefix, name, context, errorIndicator, searchIndicator, duration)
 
 	// Apply selection styling
 	if selected {
@@ -874,6 +1722,16 @@ func (m Model) renderSpanLine(node *SpanNode, selected bool) string {
 	}
 
 	return line
+}
+
+// isSearchMatch checks if a node is in current search results
+func (m Model) isSearchMatch(node *SpanNode) bool {
+	for _, match := range m.searchMatches {
+		if match == node {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) renderDetailView() string {
@@ -889,19 +1747,29 @@ func (m Model) renderDetailView() string {
 	title := fmt.Sprintf("📋 Span: %s", node.Span.Name)
 	b.WriteString(HeaderStyle.Render(title))
 	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", m.width-6))
+	b.WriteString(strings.Repeat("─", m.width-4))
+	b.WriteString("\n")
+
+	// Tab bar (same as in renderDetailPanel)
+	tabs := []string{"Overview", "Prompt", "Response", "Attributes", "Timing"}
+	var tabBar strings.Builder
+	for i, tab := range tabs {
+		if DetailTab(i) == m.selectedTab {
+			tabBar.WriteString(SelectedStyle.Bold(true).Render(" " + tab + " "))
+		} else {
+			tabBar.WriteString(MutedStyle.Render(" " + tab + " "))
+		}
+		if i < len(tabs)-1 {
+			tabBar.WriteString(MutedStyle.Render("│"))
+		}
+	}
+	b.WriteString(tabBar.String())
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", m.width-4))
 	b.WriteString("\n\n")
 
 	// Viewport content
-	b.WriteString(m.viewport.View())
-	b.WriteString("\n")
-
-	// Help bar
-	help := HelpKeyStyle.Render("[Esc]") + " Back  " +
-		HelpKeyStyle.Render("[↑↓]") + " Scroll  " +
-		HelpKeyStyle.Render("[q]") + " Quit"
-	b.WriteString("\n")
-	b.WriteString(HelpStyle.Render(help))
+	b.WriteString(m.detailViewport.View())
 
 	return b.String()
 }
@@ -1095,24 +1963,103 @@ func (m Model) renderAttributeGroup(b *strings.Builder, title string, group map[
 	}
 }
 
-func (m Model) renderHelpBar() string {
-	var help string
-	if len(m.allRuns) > 0 {
-		help = HelpKeyStyle.Render("[↑↓]") + " Navigate  " +
-			HelpKeyStyle.Render("[Enter]") + " Expand  " +
-			HelpKeyStyle.Render("[d]") + " Details  " +
-			HelpKeyStyle.Render("[/]") + " Prev/Next Run  " +
-			HelpKeyStyle.Render("[Esc]") + " List  " +
-			HelpKeyStyle.Render("[q]") + " Quit"
-	} else {
-		help = HelpKeyStyle.Render("[↑↓]") + " Navigate  " +
-			HelpKeyStyle.Render("[Enter/→]") + " Expand/Details  " +
-			HelpKeyStyle.Render("[←]") + " Collapse  " +
-			HelpKeyStyle.Render("[d]") + " Details  " +
-			HelpKeyStyle.Render("[q]") + " Quit"
+// jumpToSearchMatch moves cursor to current search match
+func (m Model) jumpToSearchMatch() Model {
+	if m.searchIndex < 0 || m.searchIndex >= len(m.searchMatches) {
+		return m
 	}
 
-	return HelpStyle.Render(help)
+	match := m.searchMatches[m.searchIndex]
+	// Find this node in visible nodes
+	for i, node := range m.visibleNodes {
+		if node == match {
+			m.cursor = i
+			m.focusArea = FocusTree
+			break
+		}
+	}
+	return m
+}
+
+// jumpToNextError finds and jumps to the next error node
+func (m Model) jumpToNextError() Model {
+	if m.errorCount == 0 {
+		return m
+	}
+
+	// Search from current cursor position forward
+	for i := m.cursor + 1; i < len(m.visibleNodes); i++ {
+		if m.isErrorNode(m.visibleNodes[i]) {
+			m.cursor = i
+			m.focusArea = FocusTree
+			// Expand parent if needed
+			m = m.ensureNodeVisible(m.visibleNodes[i])
+			return m
+		}
+	}
+
+	// Wrap around to beginning
+	for i := 0; i <= m.cursor; i++ {
+		if m.isErrorNode(m.visibleNodes[i]) {
+			m.cursor = i
+			m.focusArea = FocusTree
+			m = m.ensureNodeVisible(m.visibleNodes[i])
+			return m
+		}
+	}
+
+	return m
+}
+
+// jumpToPreviousError finds and jumps to the previous error node
+func (m Model) jumpToPreviousError() Model {
+	if m.errorCount == 0 {
+		return m
+	}
+
+	// Search from current cursor position backward
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.isErrorNode(m.visibleNodes[i]) {
+			m.cursor = i
+			m.focusArea = FocusTree
+			m = m.ensureNodeVisible(m.visibleNodes[i])
+			return m
+		}
+	}
+
+	// Wrap around to end
+	for i := len(m.visibleNodes) - 1; i >= m.cursor; i-- {
+		if m.isErrorNode(m.visibleNodes[i]) {
+			m.cursor = i
+			m.focusArea = FocusTree
+			m = m.ensureNodeVisible(m.visibleNodes[i])
+			return m
+		}
+	}
+
+	return m
+}
+
+// isErrorNode checks if a node has an error status
+func (m Model) isErrorNode(node *SpanNode) bool {
+	return node.Span.Status.Code != "" &&
+		node.Span.Status.Code != StatusUnset &&
+		node.Span.Status.Code != "Ok"
+}
+
+// ensureNodeVisible expands parent nodes to make a node visible
+func (m Model) ensureNodeVisible(node *SpanNode) Model {
+	// Walk up the tree and expand all parents
+	current := node.Parent
+	for current != nil {
+		if !current.Expanded {
+			current.Expanded = true
+		}
+		current = current.Parent
+	}
+	// Rebuild visible list
+	m.visibleNodes = FlattenTree(m.roots)
+	return m
 }
 
 // Width returns a copy with updated width
