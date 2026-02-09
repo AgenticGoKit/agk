@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/Masterminds/sprig/v3 v3.3.0
+	github.com/TyphonHill/go-mermaid v1.0.0
 	github.com/agenticgokit/agenticgokit v0.5.5
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10

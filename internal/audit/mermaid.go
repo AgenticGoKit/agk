@@ -2,104 +2,207 @@ package audit
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/TyphonHill/go-mermaid/diagrams/flowchart"
 )
 
 // GenerateMermaid creates a Mermaid flowchart from a TraceObject
 func GenerateMermaid(obj *TraceObject) string {
-	var b strings.Builder
-
-	b.WriteString("```mermaid\n")
-	b.WriteString("flowchart TD\n")
-
-	// Create nodes for each event
-	for i, event := range obj.Events {
-		nodeID := fmt.Sprintf("N%d", i)
-		label := formatNodeLabel(event)
-		shape := getNodeShape(event.Type)
-
-		b.WriteString(fmt.Sprintf("    %s%s\n", nodeID, shape(label)))
-	}
-
-	b.WriteString("\n")
-
-	// Create edges between consecutive events
-	for i := 0; i < len(obj.Events)-1; i++ {
-		b.WriteString(fmt.Sprintf("    N%d --> N%d\n", i, i+1))
-	}
-
-	// Add styling
-	b.WriteString("\n")
-	b.WriteString("    %% Styling\n")
-	for i, event := range obj.Events {
-		style := getNodeStyle(event.Type)
-		if style != "" {
-			b.WriteString(fmt.Sprintf("    style N%d %s\n", i, style))
-		}
-	}
-
-	b.WriteString("```\n")
-
-	return b.String()
+	return GenerateMermaidWithHierarchy(obj)
 }
 
 // GenerateMermaidWithHierarchy creates a Mermaid diagram respecting parent-child relationships
 func GenerateMermaidWithHierarchy(obj *TraceObject) string {
-	var b strings.Builder
-
 	// Build parent map
 	parentMap := make(map[string][]int)
 	spanIDToIndex := make(map[string]int)
+	childrenBySpan := make(map[string][]string)
+	spanByIndex := make([]string, len(obj.Events))
 
 	for i, event := range obj.Events {
 		spanIDToIndex[event.SpanID] = i
+		spanByIndex[i] = event.SpanID
 		if event.ParentID != "" && event.ParentID != "0000000000000000" {
 			parentMap[event.ParentID] = append(parentMap[event.ParentID], i)
+			childrenBySpan[event.ParentID] = append(childrenBySpan[event.ParentID], event.SpanID)
 		}
 	}
 
-	b.WriteString("```mermaid\n")
-	b.WriteString("flowchart TD\n")
+	diagram := flowchart.NewFlowchart()
+	diagram.EnableMarkdownFence()
+	diagram.SetDirection(flowchart.FlowchartDirectionTopDown)
+	diagram.Config.SetHtmlLabels(true)
 
-	// Create nodes
+	nodes := make([]*flowchart.Node, len(obj.Events))
 	for i, event := range obj.Events {
-		nodeID := fmt.Sprintf("N%d", i)
 		label := formatNodeLabel(event)
-		shape := getNodeShape(event.Type)
-		b.WriteString(fmt.Sprintf("    %s%s\n", nodeID, shape(label)))
+		node := diagram.AddNode(label)
+		applyFlowchartShape(node, event.Type)
+		if style := getFlowchartStyle(event.Type); style != nil {
+			node.SetStyle(style)
+		}
+		nodes[i] = node
 	}
 
-	b.WriteString("\n")
-
-	// Create edges based on parent-child relationships
-	for parentSpanID, children := range parentMap {
+	parentIndices := make([]int, 0, len(parentMap))
+	for parentSpanID := range parentMap {
 		if parentIdx, ok := spanIDToIndex[parentSpanID]; ok {
+			parentIndices = append(parentIndices, parentIdx)
+		}
+	}
+	sort.Ints(parentIndices)
+
+	addedLinks := make(map[string]bool)
+	addLink := func(fromIdx, toIdx int) {
+		key := fmt.Sprintf("%d->%d", fromIdx, toIdx)
+		if addedLinks[key] {
+			return
+		}
+		addedLinks[key] = true
+		diagram.AddLink(nodes[fromIdx], nodes[toIdx])
+	}
+
+	// Special handling for sequential workflows: chain steps and nest descendants
+	sequentialParents := make([]int, 0)
+	for _, parentIdx := range parentIndices {
+		if isWorkflowSequential(obj.Events[parentIdx]) {
+			sequentialParents = append(sequentialParents, parentIdx)
+		}
+	}
+
+	if len(sequentialParents) > 0 {
+		for _, parentIdx := range sequentialParents {
+			parentSpanID := obj.Events[parentIdx].SpanID
+			children := parentMap[parentSpanID]
+			stepChildren := make([]int, 0)
 			for _, childIdx := range children {
-				b.WriteString(fmt.Sprintf("    N%d --> N%d\n", parentIdx, childIdx))
+				if isWorkflowStep(obj.Events[childIdx]) {
+					stepChildren = append(stepChildren, childIdx)
+				}
+			}
+
+			sort.Slice(stepChildren, func(i, j int) bool {
+				idxI := stepChildren[i]
+				idxJ := stepChildren[j]
+				stepI, okI := getStepIndex(obj.Events[idxI])
+				stepJ, okJ := getStepIndex(obj.Events[idxJ])
+				if okI && okJ {
+					return stepI < stepJ
+				}
+				if okI != okJ {
+					return okI
+				}
+				return obj.Events[idxI].Timestamp.Before(obj.Events[idxJ].Timestamp)
+			})
+
+			if len(stepChildren) > 0 {
+				addLink(parentIdx, stepChildren[0])
+				for i := 0; i < len(stepChildren)-1; i++ {
+					addLink(stepChildren[i], stepChildren[i+1])
+				}
+			}
+
+			for _, stepIdx := range stepChildren {
+				descendants := collectDescendantIndices(spanByIndex[stepIdx], spanIDToIndex, childrenBySpan, obj)
+				if len(descendants) == 0 {
+					continue
+				}
+				sort.Slice(descendants, func(i, j int) bool {
+					return obj.Events[descendants[i]].Timestamp.Before(obj.Events[descendants[j]].Timestamp)
+				})
+				addLink(stepIdx, descendants[0])
+				for i := 0; i < len(descendants)-1; i++ {
+					addLink(descendants[i], descendants[i+1])
+				}
 			}
 		}
+
+		return diagram.String()
 	}
 
-	// For orphan nodes (no parent in trace), connect sequentially
-	hasParent := make(map[int]bool)
-	for _, children := range parentMap {
-		for _, idx := range children {
-			hasParent[idx] = true
+	for _, parentIdx := range parentIndices {
+		parentEvent := obj.Events[parentIdx]
+		parentSpanID := parentEvent.SpanID
+		children := parentMap[parentSpanID]
+
+		if isWorkflowSequential(parentEvent) {
+			stepChildren := make([]int, 0)
+			otherChildren := make([]int, 0)
+			for _, childIdx := range children {
+				if isWorkflowStep(obj.Events[childIdx]) {
+					stepChildren = append(stepChildren, childIdx)
+				} else {
+					otherChildren = append(otherChildren, childIdx)
+				}
+			}
+
+			if len(stepChildren) > 0 {
+				sort.Slice(stepChildren, func(i, j int) bool {
+					idxI := stepChildren[i]
+					idxJ := stepChildren[j]
+					stepI, okI := getStepIndex(obj.Events[idxI])
+					stepJ, okJ := getStepIndex(obj.Events[idxJ])
+					if okI && okJ {
+						return stepI < stepJ
+					}
+					if okI != okJ {
+						return okI
+					}
+					return obj.Events[idxI].Timestamp.Before(obj.Events[idxJ].Timestamp)
+				})
+
+				addLink(parentIdx, stepChildren[0])
+				for i := 0; i < len(stepChildren)-1; i++ {
+					addLink(stepChildren[i], stepChildren[i+1])
+				}
+			}
+
+			sort.Ints(otherChildren)
+			for _, childIdx := range otherChildren {
+				addLink(parentIdx, childIdx)
+			}
+			continue
+		}
+
+		sort.Ints(children)
+		for _, childIdx := range children {
+			addLink(parentIdx, childIdx)
 		}
 	}
 
-	// Add styling
-	b.WriteString("\n")
-	for i, event := range obj.Events {
-		style := getNodeStyle(event.Type)
-		if style != "" {
-			b.WriteString(fmt.Sprintf("    style N%d %s\n", i, style))
+	return diagram.String()
+}
+
+func collectDescendantIndices(rootSpanID string, spanIDToIndex map[string]int, childrenBySpan map[string][]string, obj *TraceObject) []int {
+	var result []int
+	queue := []string{rootSpanID}
+	visited := make(map[string]bool)
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		children := childrenBySpan[current]
+		for _, childSpan := range children {
+			idx, ok := spanIDToIndex[childSpan]
+			if ok {
+				if isWorkflowStep(obj.Events[idx]) || isWorkflowSequential(obj.Events[idx]) {
+					// Skip other workflow step nodes to avoid cross-linking
+				} else {
+					result = append(result, idx)
+				}
+			}
+			queue = append(queue, childSpan)
 		}
 	}
 
-	b.WriteString("```\n")
-
-	return b.String()
+	return result
 }
 
 // formatNodeLabel creates a concise label for the node
@@ -109,17 +212,66 @@ func formatNodeLabel(event TraceEvent) string {
 
 	// Get a short description
 	desc := event.SpanName
-	if len(desc) > 25 {
-		desc = desc[:22] + "..."
+	if stepName, ok := event.Metadata["agk.workflow.step_name"].(string); ok && stepName != "" {
+		desc = "step:" + stepName
+	}
+	if agentName, ok := event.Metadata["agk.agent.name"].(string); ok && agentName != "" {
+		desc = fmt.Sprintf("%s @%s", desc, agentName)
+	}
+	if len(desc) > 60 {
+		desc = desc[:57] + "..."
 	}
 
-	// Add duration if significant
+	// Add duration on new line
 	duration := ""
-	if event.DurationMs > 100 {
-		duration = fmt.Sprintf(" (%dms)", event.DurationMs)
+	if event.DurationMs > 0 {
+		duration = fmt.Sprintf("<br/>%dms", event.DurationMs)
 	}
 
 	return fmt.Sprintf("%s %s%s", icon, desc, duration)
+}
+
+func isWorkflowSequential(event TraceEvent) bool {
+	name := strings.ToLower(event.SpanName)
+	return strings.Contains(name, "workflow.sequential")
+}
+
+func isWorkflowStep(event TraceEvent) bool {
+	name := strings.ToLower(event.SpanName)
+	if strings.Contains(name, "workflow.step") {
+		return true
+	}
+	if stepName, ok := event.Metadata["agk.workflow.step_name"].(string); ok && stepName != "" {
+		return true
+	}
+	return false
+}
+
+func getStepIndex(event TraceEvent) (int, bool) {
+	if raw, ok := event.Metadata["agk.workflow.step_index"]; ok {
+		switch v := raw.(type) {
+		case int:
+			return v, true
+		case int64:
+			return int(v), true
+		case float64:
+			return int(v), true
+		case float32:
+			return int(v), true
+		case string:
+			if parsed, err := parseInt(v); err == nil {
+				return parsed, true
+			}
+		}
+	}
+	if !event.Timestamp.IsZero() {
+		return int(event.Timestamp.UnixMilli()), false
+	}
+	return 0, false
+}
+
+func parseInt(value string) (int, error) {
+	return strconv.Atoi(value)
 }
 
 // getEventIcon returns an emoji for the event type
@@ -141,37 +293,47 @@ func getEventIcon(eventType EventType) string {
 }
 
 // getNodeShape returns a function that wraps the label in the appropriate shape
-func getNodeShape(eventType EventType) func(string) string {
+func applyFlowchartShape(node *flowchart.Node, eventType EventType) {
 	switch eventType {
 	case EventTypeThought:
-		return func(label string) string { return fmt.Sprintf("([%s])", label) } // Stadium
+		node.SetShape(flowchart.NodeShapeTerminal)
 	case EventTypeToolCall:
-		return func(label string) string { return fmt.Sprintf("[[%s]]", label) } // Subroutine
+		node.SetShape(flowchart.NodeShapeSubprocess)
 	case EventTypeObservation:
-		return func(label string) string { return fmt.Sprintf("[/%s/]", label) } // Parallelogram
+		node.SetShape(flowchart.NodeShapeInputOutput)
 	case EventTypeLLMCall:
-		return func(label string) string { return fmt.Sprintf("{%s}", label) } // Rhombus
+		node.SetShape(flowchart.NodeShapeDecision)
 	case EventTypeDecision:
-		return func(label string) string { return fmt.Sprintf("{{%s}}", label) } // Hexagon
+		node.SetShape(flowchart.NodeShapePrepare)
 	default:
-		return func(label string) string { return fmt.Sprintf("[%s]", label) }
+		node.SetShape(flowchart.NodeShapeProcess)
 	}
 }
 
-// getNodeStyle returns Mermaid styling for the event type
-func getNodeStyle(eventType EventType) string {
+// getFlowchartStyle returns Mermaid styling for the event type
+func getFlowchartStyle(eventType EventType) *flowchart.NodeStyle {
+	style := flowchart.NewNodeStyle()
+	style.StrokeWidth = 1
+
 	switch eventType {
 	case EventTypeThought:
-		return "fill:#e1f5fe,stroke:#01579b"
+		style.Fill = "#e1f5fe"
+		style.Stroke = "#01579b"
 	case EventTypeToolCall:
-		return "fill:#e8f5e9,stroke:#1b5e20"
+		style.Fill = "#e8f5e9"
+		style.Stroke = "#1b5e20"
 	case EventTypeObservation:
-		return "fill:#fff3e0,stroke:#e65100"
+		style.Fill = "#fff3e0"
+		style.Stroke = "#e65100"
 	case EventTypeLLMCall:
-		return "fill:#f3e5f5,stroke:#4a148c"
+		style.Fill = "#f3e5f5"
+		style.Stroke = "#4a148c"
 	case EventTypeDecision:
-		return "fill:#fce4ec,stroke:#880e4f"
+		style.Fill = "#fce4ec"
+		style.Stroke = "#880e4f"
 	default:
-		return ""
+		return nil
 	}
+
+	return style
 }
