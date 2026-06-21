@@ -70,9 +70,10 @@ Examples:
 	# List available templates
   agk init --list`,
 	Args: func(cmd *cobra.Command, args []string) error {
-		// Allow zero args only when listing templates
-		if initListTemplates {
-			return nil
+		// Allow zero args when listing templates or in interactive mode
+		// (the wizard prompts for the project name).
+		if initListTemplates || initInteractive {
+			return cobra.MaximumNArgs(1)(cmd, args)
 		}
 		return cobra.ExactArgs(1)(cmd, args)
 	},
@@ -94,7 +95,22 @@ func runInitCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	projectName := args[0]
+	projectName := ""
+	if len(args) > 0 {
+		projectName = args[0]
+	}
+
+	// Interactive mode: walk the user through setup and fill in any unset options.
+	if initInteractive {
+		res := runInitWizard(os.Stdin, os.Stdout, projectName)
+		projectName = res.ProjectName
+		initTemplate = res.Template
+		initLLMProvider = res.LLMProvider
+		if res.Description != "" {
+			initDescription = res.Description
+		}
+	}
+
 	span.SetAttributes(
 		attribute.String("project_name", projectName),
 		attribute.String("template", initTemplate),
