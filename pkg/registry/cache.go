@@ -147,6 +147,43 @@ func (c *CacheManager) Remove(source, version string) error {
 	return nil
 }
 
+// FindByName returns all cached templates whose manifest name or source matches ref.
+func (c *CacheManager) FindByName(ref string) ([]CachedTemplate, error) {
+	all, err := c.List()
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []CachedTemplate
+	for _, t := range all {
+		if t.Name == ref || filepath.ToSlash(t.Source) == ref {
+			matches = append(matches, t)
+		}
+	}
+	return matches, nil
+}
+
+// RemoveByName removes cached templates identified by manifest name (or source),
+// covering all cached versions, and returns how many entries were removed.
+func (c *CacheManager) RemoveByName(ref string) (int, error) {
+	matches, err := c.FindByName(ref)
+	if err != nil {
+		return 0, err
+	}
+	if len(matches) == 0 {
+		return 0, fmt.Errorf("no cached template matches %q", ref)
+	}
+
+	removed := 0
+	for _, t := range matches {
+		if err := os.RemoveAll(t.LocalPath); err != nil {
+			return removed, fmt.Errorf("failed to remove %s: %w", t.LocalPath, err)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // Clear removes all cached templates.
 func (c *CacheManager) Clear() error {
 	if err := os.RemoveAll(c.BaseDir); err != nil {
