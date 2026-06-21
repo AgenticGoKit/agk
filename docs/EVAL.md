@@ -135,15 +135,37 @@ tests:
 
 ### 3. Run Tests
 
+The simplest path is `--serve`, which builds and launches your project in EvalServer
+mode, waits for it to become healthy, runs the tests, and stops it automatically:
+
+```bash
+# One command: launch the server, run tests, tear down
+agk eval tests.yaml --serve
+
+# View report
+cat .agk/reports/eval-report-*.md
+```
+
+`--serve` options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--serve` | off | Launch the project in EvalServer mode for the run, then stop it |
+| `--serve-dir` | `.` | Project directory to launch |
+| `--serve-cmd` | `go run .` | Custom launch command (e.g. a prebuilt binary) |
+| `--serve-timeout` | `90` | Seconds to wait for the server to become healthy |
+
+It sets `AGK_EVAL_MODE=true` in the launched process and derives the health URL from the
+test file's `target.url`. Server output is captured and printed if startup fails.
+
+Prefer to manage the server yourself? Run it in a separate terminal and omit `--serve`:
+
 ```bash
 # Terminal 1: Start your workflow in EvalServer mode
 AGK_EVAL_MODE=true ./myworkflow
 
 # Terminal 2: Run tests
 agk eval tests.yaml --timeout 200
-
-# View report
-cat .agk/reports/eval-report-*.md
 ```
 
 ---
