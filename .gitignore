@@ -1,0 +1,16 @@
+# Build artifacts
+/agk
+/agk.exe
+/agk-dev
+/dist/
+/build/
+
+# Test/coverage output
+coverage.txt
+coverage.html
+
+# AGK runtime output
+.agk/
+
+# Editor/OS
+.DS_Store

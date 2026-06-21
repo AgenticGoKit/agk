@@ -51,9 +51,15 @@ go mod tidy
 # Set your API key
 export OPENAI_API_KEY=sk-...
 
-# Run the agent
-go run main.go
+# Run the agent (tracing on by default, prints a trace summary on exit)
+agk run
+
+# ...or re-run automatically on file changes
+agk run --watch
 ```
+
+> `agk run` wraps `go run .`, enables tracing, and surfaces a trace summary plus a
+> `agk trace view` hint when the program exits. Prefer plain `go run main.go`? That still works.
 
 ---
 
@@ -199,6 +205,8 @@ agk trace mermaid > trace_flow.md
 |---------|-------------|
 | `init` | Create a new project from a template. |
 | `init --list` | Show details of all available templates. |
+| `run` | Build and run a project with tracing on; prints a trace summary on exit. |
+| `run --watch` | Re-run the project automatically when `.go` files change. |
 | `eval` | Run automated tests against workflows with semantic matching. |
 | `trace list` | List all captured trace runs. |
 | `trace show` | Display summary of a specific run. |
@@ -214,6 +222,7 @@ agk trace mermaid > trace_flow.md
 - **Smart Scaffolding** (Quickstart, Workflow bases)
 - **Eval Framework** (Semantic matching, LLM-as-judge, professional reports)
 - **Trace System** (Interactive TUI, Mermaid export, detailed spans)
+- **Run Command** (`agk run` / `--watch` — tracing-on execution with inline trace summary)
 - **Streaming Support** (Native across all templates)
 
 ### In Progress
