@@ -183,6 +183,12 @@ agk trace list
 agk trace show <trace-id>
 ```
 
+**Live Tail**
+Follow a run's spans in real time (great alongside `agk run` in another terminal).
+```bash
+agk trace watch          # follow the live run, or wait for the next one
+```
+
 **Visual Flowchart (Mermaid)**
 Generate a diagram of the agent's execution path.
 ```bash
@@ -203,6 +209,7 @@ agk trace mermaid > trace_flow.md
 | `trace list` | List all captured trace runs. |
 | `trace show` | Display summary of a specific run. |
 | `trace view` | Open the interactive TUI trace explorer. |
+| `trace watch` | Live-tail a run's spans as it executes. |
 | `trace mermaid` | Generate Mermaid flowchart of trace execution. |
 
 ---
