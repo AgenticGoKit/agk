@@ -222,6 +222,47 @@ tests:
 
 ---
 
+## Trace (Behavioral) Assertions
+
+Content matching checks *what* an agent answered. Trace assertions check *how* it got
+there — which tools it called, how many LLM calls it made, and the path it took. They run
+**after** the content match and are configured under `expect.trace` (the canonical schema
+lives in `internal/eval/types.go`).
+
+After a successful invoke, AGK fetches the run's trace from the EvalServer
+(`GET /traces/{id}`) and evaluates the assertions. Tool calls also use the `tools_called`
+field from the invoke response, so `tool_calls` is checked even if the trace can't be fetched.
+
+```yaml
+tests:
+  - name: "Answers about Paris using search, efficiently"
+    input: "What's the weather in Paris?"
+    expect:
+      type: contains
+      values: ["Paris"]
+      trace:
+        tool_calls: ["search"]                  # each listed tool must have been called
+        llm_calls: 2                             # exact LLM-call count
+        execution_path: ["research", "format"]   # must appear, in order, as a subsequence
+        min_steps: 2                             # observed steps >= 2
+        max_steps: 8                             # observed steps <= 8
+```
+
+### Trace Fields (`expect.trace`)
+
+| Field | Type | Check |
+|-------|------|-------|
+| `tool_calls` | string[] | Every listed tool must appear among the called tools (subset). |
+| `llm_calls` | int | When > 0, the observed LLM-call count must match **exactly**. |
+| `execution_path` | string[] | The listed span names must appear **in order** (gaps allowed). |
+| `min_steps` | int | Observed step count (total spans) must be **≥** this. |
+| `max_steps` | int | Observed step count (total spans) must be **≤** this. |
+
+A test fails if any assertion fails; the report lists every failed assertion. Omit a field
+to skip that check.
+
+---
+
 ## Semantic Matching Strategies
 
 ### 1. Embedding Strategy
