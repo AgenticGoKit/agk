@@ -38,6 +38,9 @@ go build -o agk main.go
 # Initialize a new project with the quickstart template
 ./agk init my-agent --template quickstart --llm openai
 
+# ...or let the interactive wizard guide you through template + provider
+./agk init -i
+
 # Navigate to the project
 cd my-agent
 
@@ -214,6 +217,7 @@ agk trace mermaid > trace_flow.md
 - **Smart Scaffolding** (Quickstart, Workflow bases)
 - **Eval Framework** (Semantic matching, LLM-as-judge, professional reports)
 - **Trace System** (Interactive TUI, Mermaid export, detailed spans)
+- **Interactive Init Wizard** (`agk init -i` — guided template & provider setup)
 - **Streaming Support** (Native across all templates)
 
 ### In Progress
@@ -224,7 +228,6 @@ agk trace mermaid > trace_flow.md
 - **Template Distribution** (`pack`, `push`)
 - **Cloud Deployment Engine** (`agk deploy`)
 - **Workflow Visualization** (Interactive graph editor)
-- **Interactive Init Wizard** (`agk init -i`)
 - **MCP Server Management**
 - **RAG & Knowledge Base Management**
 
