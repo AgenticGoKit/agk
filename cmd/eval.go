@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -39,6 +41,10 @@ var (
 	evalOutputFormat string
 	evalFailFast     bool
 	evalReportFile   string
+	evalServe        bool
+	evalServeDir     string
+	evalServeCmd     string
+	evalServeWait    int
 )
 
 func init() {
@@ -50,6 +56,10 @@ func init() {
 	evalCmd.Flags().StringVarP(&evalOutputFormat, "format", "f", "console", "Output format (console, json, junit, markdown)")
 	evalCmd.Flags().BoolVar(&evalFailFast, "fail-fast", false, "Stop on first test failure")
 	evalCmd.Flags().StringVarP(&evalReportFile, "report", "r", "", "Save detailed report to file (auto-generated if not specified)")
+	evalCmd.Flags().BoolVar(&evalServe, "serve", false, "Build & launch the project in EvalServer mode, run tests, then stop it")
+	evalCmd.Flags().StringVar(&evalServeDir, "serve-dir", ".", "Project directory to launch when --serve is set")
+	evalCmd.Flags().StringVar(&evalServeCmd, "serve-cmd", "", "Custom command to launch the server (default: go run .)")
+	evalCmd.Flags().IntVar(&evalServeWait, "serve-timeout", 90, "Seconds to wait for the server to become healthy")
 }
 
 func runEval(cmd *cobra.Command, args []string) error {
@@ -84,6 +94,26 @@ func runEval(cmd *cobra.Command, args []string) error {
 	if evalValidateOnly {
 		fmt.Println("✓ Test file is valid")
 		return nil
+	}
+
+	// Optionally launch the project's EvalServer for the duration of the run.
+	var srv *evalServer
+	if evalServe {
+		s, err := launchAndWait(evalServeDir, evalServeCmd, suite.Target.URL, evalServeWait, evalVerbose)
+		if err != nil {
+			return err
+		}
+		srv = s
+		defer srv.Stop()
+
+		// Ensure the server is stopped if the user interrupts the run.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			srv.Stop()
+			os.Exit(130)
+		}()
 	}
 
 	// Create test runner
@@ -139,8 +169,12 @@ func runEval(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Exit with error code if tests failed
+	// Exit with error code if tests failed. os.Exit skips deferred calls, so stop
+	// the server explicitly first.
 	if !results.AllPassed() {
+		if srv != nil {
+			srv.Stop()
+		}
 		os.Exit(1)
 	}
 
