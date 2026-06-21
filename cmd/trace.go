@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agenticgokit/agk/internal/audit"
+	"github.com/agenticgokit/agk/internal/pricing"
 	"github.com/agenticgokit/agk/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -637,7 +638,6 @@ func parseTraceFile(runPath string) (TraceRun, error) {
 	}
 
 	durationSeconds := stats.LastSpan.Sub(stats.FirstSpan).Seconds()
-	estimatedCost := float64(stats.TotalTokens) * 0.00001 // Rough estimate
 
 	return TraceRun{
 		RunID:         runID,
@@ -648,17 +648,22 @@ func parseTraceFile(runPath string) (TraceRun, error) {
 		Duration:      durationSeconds,
 		SpanCount:     stats.SpanCount,
 		LLMCalls:      stats.LLMCalls,
-		TotalTokens:   stats.TotalTokens,
-		EstimatedCost: estimatedCost,
+		TotalTokens:   stats.Tokens(),
+		EstimatedCost: stats.Cost(),
 	}, nil
 }
 
 type RunStats struct {
-	SpanCount   int
-	LLMCalls    int
-	TotalTokens int
-	FirstSpan   time.Time
-	LastSpan    time.Time
+	SpanCount     int
+	LLMCalls      int
+	InputTokens   int
+	OutputTokens  int
+	TotalTokens   int
+	Model         string
+	DirectCost    float64 // summed from agk.llm.cost.usd attributes, if emitted
+	HasDirectCost bool
+	FirstSpan     time.Time
+	LastSpan      time.Time
 }
 
 func (s *RunStats) Update(span map[string]interface{}) {
@@ -671,32 +676,81 @@ func (s *RunStats) Update(span map[string]interface{}) {
 		}
 	}
 
-	// Extract token count from attributes
+	// Extract token/model/cost data from attributes
 	if attrs, ok := span["Attributes"].([]interface{}); ok {
-		s.extractTokens(attrs)
+		s.extractAttrs(attrs)
 	}
 
 	// Extract start and end times
 	s.updateTimes(span)
 }
 
-func (s *RunStats) extractTokens(attrs []interface{}) {
+// extractAttrs pulls token, model, and cost data from a span's attributes.
+// It recognizes the AgenticGoKit observability keys (agk.llm.tokens.*, agk.llm.model,
+// agk.llm.cost.usd) plus a few legacy aliases for backward compatibility.
+func (s *RunStats) extractAttrs(attrs []interface{}) {
 	for _, attr := range attrs {
-		if attrMap, ok := attr.(map[string]interface{}); ok {
-			if key, ok := attrMap["Key"].(string); ok {
-				// Look for token-related attributes
-				if key == "llm.usage.completion_tokens" || key == "llm.completion_tokens" {
-					if val, ok := attrMap["Value"].(map[string]interface{}); ok {
-						if tokenVal, ok := val["Value"]; ok {
-							if tokenInt, err := toInt64(tokenVal); err == nil {
-								s.TotalTokens += int(tokenInt)
-							}
-						}
-					}
-				}
+		attrMap, ok := attr.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		key, ok := attrMap["Key"].(string)
+		if !ok {
+			continue
+		}
+		val, ok := attrMap["Value"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		raw := val["Value"]
+
+		switch key {
+		case "agk.llm.tokens.input", "agk.llm.tokens.prompt",
+			"llm.usage.prompt_tokens", "llm.prompt_tokens":
+			if n, err := toInt64(raw); err == nil {
+				s.InputTokens += int(n)
+			}
+		case "agk.llm.tokens.output", "agk.llm.tokens.completion",
+			"llm.usage.completion_tokens", "llm.completion_tokens":
+			if n, err := toInt64(raw); err == nil {
+				s.OutputTokens += int(n)
+			}
+		case "agk.llm.tokens.total", "llm.usage.total_tokens":
+			if n, err := toInt64(raw); err == nil {
+				s.TotalTokens += int(n)
+			}
+		case "agk.llm.cost.usd":
+			if f, err := toFloat64(raw); err == nil {
+				s.DirectCost += f
+				s.HasDirectCost = true
+			}
+		case "agk.llm.model":
+			if str, ok := raw.(string); ok && str != "" {
+				s.Model = str
 			}
 		}
 	}
+}
+
+// Tokens returns the best available total token count, preferring an explicit
+// total and falling back to input+output.
+func (s *RunStats) Tokens() int {
+	if s.TotalTokens > 0 {
+		return s.TotalTokens
+	}
+	return s.InputTokens + s.OutputTokens
+}
+
+// Cost returns the estimated USD cost: a directly-reported cost if present,
+// otherwise a price-table estimate, otherwise 0 for unknown/local models.
+func (s *RunStats) Cost() float64 {
+	if s.HasDirectCost {
+		return s.DirectCost
+	}
+	if cost, ok := pricing.Estimate(s.Model, s.InputTokens, s.OutputTokens); ok {
+		return cost
+	}
+	return 0
 }
 
 func (s *RunStats) updateTimes(span map[string]interface{}) {
@@ -738,6 +792,23 @@ func toInt64(v interface{}) (int64, error) {
 		return i, err
 	default:
 		return 0, fmt.Errorf("cannot convert %T to int64", v)
+	}
+}
+
+// toFloat64 safely converts a value to float64
+func toFloat64(v interface{}) (float64, error) {
+	switch val := v.(type) {
+	case float64:
+		return val, nil
+	case int:
+		return float64(val), nil
+	case int64:
+		return float64(val), nil
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		return f, err
+	default:
+		return 0, fmt.Errorf("cannot convert %T to float64", v)
 	}
 }
 
