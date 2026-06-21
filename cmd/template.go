@@ -77,24 +77,26 @@ var templateRemoveCmd = &cobra.Command{
 	Short: "Remove a template from the cache",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		source := args[0]
+		ref := args[0]
 
 		cm, err := registry.NewCacheManager("")
 		if err != nil {
 			return err
 		}
 
-		// Try to remove by exact source match first, then maybe by name?
-		// CacheManager.Remove takes source.
-		// If user passes "rag-agent" (name) but source is "github.com/...", Remove might fail.
-		// TODO: Implement lookup by name in CacheManager to support removing by name.
-		// For now, assume source.
-
-		if err := cm.Remove(source, ""); err != nil {
-			return err
+		// Prefer lookup by manifest name or source (so `agk template remove rag-agent`
+		// works, not just the full source path).
+		if n, err := cm.RemoveByName(ref); err == nil {
+			color.Green("Removed template: %s (%d cached version(s))", ref, n)
+			return nil
 		}
 
-		color.Green("Removed template: %s", source)
+		// Fall back to treating the argument as a source path and removing all versions.
+		if err := cm.Remove(ref, ""); err != nil {
+			return fmt.Errorf("template %q not found in cache", ref)
+		}
+
+		color.Green("Removed template: %s", ref)
 		return nil
 	},
 }
