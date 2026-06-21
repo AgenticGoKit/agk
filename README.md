@@ -199,6 +199,7 @@ agk trace mermaid > trace_flow.md
 |---------|-------------|
 | `init` | Create a new project from a template. |
 | `init --list` | Show details of all available templates. |
+| `doctor` | Diagnose your environment (Go, API keys, Ollama, registry) before running agents. |
 | `eval` | Run automated tests against workflows with semantic matching. |
 | `trace list` | List all captured trace runs. |
 | `trace show` | Display summary of a specific run. |
@@ -214,6 +215,7 @@ agk trace mermaid > trace_flow.md
 - **Smart Scaffolding** (Quickstart, Workflow bases)
 - **Eval Framework** (Semantic matching, LLM-as-judge, professional reports)
 - **Trace System** (Interactive TUI, Mermaid export, detailed spans)
+- **Environment Doctor** (`agk doctor` — preflight checks for Go, keys, Ollama, registry)
 - **Streaming Support** (Native across all templates)
 
 ### In Progress
