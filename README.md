@@ -203,6 +203,7 @@ agk trace mermaid > trace_flow.md
 | `trace list` | List all captured trace runs. |
 | `trace show` | Display summary of a specific run. |
 | `trace view` | Open the interactive TUI trace explorer. |
+| `trace diff` | Compare two trace runs (duration, tokens, cost, LLM calls). |
 | `trace mermaid` | Generate Mermaid flowchart of trace execution. |
 
 ---
