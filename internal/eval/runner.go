@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -190,8 +191,32 @@ func (r *Runner) runTest(test Test, target *HTTPTarget) TestResult {
 		return result
 	}
 
-	// TODO: Validate trace expectations if specified (test.Expect.Trace)
+	// Validate trace (behavioral) expectations if specified
+	if test.Expect.Trace != nil {
+		if failures := r.validateTraceExpectation(test, target, resp); len(failures) > 0 {
+			result.Passed = false
+			result.ErrorMessage = "trace assertion failed: " + strings.Join(failures, "; ")
+			return result
+		}
+	}
 
 	result.Passed = true
 	return result
+}
+
+// validateTraceExpectation fetches the run's trace (when available) and checks it
+// against the test's trace expectation. Tool calls come from the invoke response;
+// LLM-call count, execution path, and step counts come from the fetched trace.
+func (r *Runner) validateTraceExpectation(test Test, target *HTTPTarget, resp *InvokeResponse) []string {
+	var observed *evalTrace
+	if resp.TraceID != "" {
+		if t, err := target.FetchTrace(resp.TraceID); err == nil {
+			observed = t
+		} else if r.config.Verbose {
+			fmt.Printf("  [trace] could not fetch trace %s: %v\n", resp.TraceID, err)
+		}
+	}
+
+	obs := buildObservedTrace(observed, resp.ToolsCalled)
+	return ValidateTrace(test.Expect.Trace, obs)
 }

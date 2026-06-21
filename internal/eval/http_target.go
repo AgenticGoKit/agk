@@ -91,6 +91,31 @@ func (ht *HTTPTarget) Invoke(input string, timeout int) (*InvokeResponse, error)
 	return &invokeResp, nil
 }
 
+// FetchTrace retrieves a trace by ID from the EvalServer's GET /traces/{id} endpoint.
+// It is used to validate trace (behavioral) expectations after an invoke.
+func (ht *HTTPTarget) FetchTrace(traceID string) (*evalTrace, error) {
+	if traceID == "" {
+		return nil, fmt.Errorf("empty trace id")
+	}
+
+	resp, err := ht.client.Get(ht.baseURL + "/traces/" + traceID)
+	if err != nil {
+		return nil, fmt.Errorf("trace request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("trace fetch returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var trace evalTrace
+	if err := json.NewDecoder(resp.Body).Decode(&trace); err != nil {
+		return nil, fmt.Errorf("failed to parse trace: %w", err)
+	}
+	return &trace, nil
+}
+
 // Health checks if the target is healthy
 func (ht *HTTPTarget) Health() error {
 	resp, err := ht.client.Get(ht.baseURL + "/health")
